@@ -1,8 +1,10 @@
-# init_db.py  —  запустить один раз для первоначального наполнения БД
+#   rm school.db
+#   python init_db.py
+
 from database import Base, engine, SessionLocal, Teacher, Class, Student
 from config import ADMIN_TELEGRAM_ID
 
-# Создаём все таблицы
+# Создаём все таблицы (с учётом новой схемы attendance_sessions)
 Base.metadata.create_all(bind=engine)
 
 db = SessionLocal()
@@ -31,4 +33,4 @@ for class_name, names in sample_students.items():
 db.commit()
 db.close()
 
-print("✅ База данных инициализирована.")
+print("✅ База данных инициализирована (с новой схемой session_date).")

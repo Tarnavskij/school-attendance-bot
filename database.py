@@ -1,7 +1,7 @@
 # database.py
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Date, ForeignKey, UniqueConstraint, Index
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
-from datetime import datetime
+from datetime import datetime, date
 from config import DATABASE_URL
 
 engine = create_engine(
@@ -42,7 +42,7 @@ class Student(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False)
-    class_id = Column(Integer, ForeignKey("classes.id"), nullable=False)
+    class_id = Column(Integer, ForeignKey("classes.id"), nullable=False, index=True)
 
     class_ = relationship("Class", back_populates="students")
     records = relationship("AttendanceRecord", back_populates="student")
@@ -50,13 +50,24 @@ class Student(Base):
 
 class AttendanceSession(Base):
     __tablename__ = "attendance_sessions"
+    __table_args__ = (
+        # Защита от гонки на уровне БД: один класс может иметь не более одной
+        # сессии переклички в день, независимо от статуса (active/completed/auto_completed).
+        # Если два учителя почти одновременно создадут сессию для одного класса,
+        # второй INSERT упадёт с IntegrityError — это ожидаемо и обрабатывается в repositories.create_session.
+        UniqueConstraint("class_id", "session_date", name="uq_class_session_per_day"),
+        Index("ix_session_date_status", "session_date", "status"),
+    )
 
     id = Column(Integer, primary_key=True)
     teacher_id = Column(Integer, ForeignKey("teachers.id"), nullable=False)
     class_id = Column(Integer, ForeignKey("classes.id"), nullable=False)
+    # Чистая календарная дата сессии (без времени) — используется для всех фильтров
+    # "перекличка за такой-то день" вместо func.date(start_time), что не дружит с индексами.
+    session_date = Column(Date, default=date.today, nullable=False)
     start_time = Column(DateTime, default=datetime.now, nullable=False)
     end_time = Column(DateTime, nullable=True)
-    status = Column(String(20), default="active", nullable=False)
+    status = Column(String(20), default="active", nullable=False, index=True)
 
     teacher = relationship("Teacher", back_populates="sessions")
     class_ = relationship("Class", back_populates="sessions")
@@ -67,8 +78,8 @@ class AttendanceRecord(Base):
     __tablename__ = "attendance_records"
 
     id = Column(Integer, primary_key=True)
-    session_id = Column(Integer, ForeignKey("attendance_sessions.id"), nullable=False)
-    student_id = Column(Integer, ForeignKey("students.id"), nullable=False)
+    session_id = Column(Integer, ForeignKey("attendance_sessions.id"), nullable=False, index=True)
+    student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
     is_present = Column(Boolean, default=True, nullable=False)
     reason = Column(String(255), nullable=True)
 
@@ -83,5 +94,5 @@ class RegistrationRequest(Base):
     name = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False)
     class_name = Column(String(50), nullable=True)
-    status = Column(String(20), default="pending", nullable=False)
+    status = Column(String(20), default="pending", nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.now, nullable=False)

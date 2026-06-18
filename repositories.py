@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
 from database import SessionLocal, Teacher, Class, Student, AttendanceSession, AttendanceRecord, RegistrationRequest
 
@@ -62,6 +63,11 @@ class SessionDTO:
 @dataclass
 class CreatedSession:
     id: int
+
+
+class SessionAlreadyExists(Exception):
+    """Поднимается, когда на класс за сегодня уже есть сессия (в т.ч. гонка двух учителей)."""
+    pass
 
 
 def get_teacher_by_telegram_id(telegram_id: int) -> TeacherDTO | None:
@@ -134,13 +140,19 @@ def get_all_classes() -> list[ClassDTO]:
 
 
 def get_available_classes(today_date: date) -> list[ClassDTO]:
+    """
+    Класс доступен для выбора, если по нему СЕГОДНЯ ещё нет ни одной сессии
+    (в любом статусе — active, completed или auto_completed).
+
+    Раньше здесь проверялся только status == "active", что позволяло провести
+    повторную перекличку в уже отмеченном классе. Теперь — максимум одна
+    сессия на класс в день, точка.
+    """
     with get_db() as db:
-        busy_ids = (db.query(AttendanceSession.class_id)
-                    .filter(AttendanceSession.status == "active",
-                            func.date(AttendanceSession.start_time) == today_date)
-                    .subquery())
+        taken_ids = (db.query(AttendanceSession.class_id)
+                    .filter(AttendanceSession.session_date == today_date))
         return [ClassDTO(id=c.id, name=c.name)
-                for c in db.query(Class).filter(~Class.id.in_(busy_ids)).all()]
+                for c in db.query(Class).filter(~Class.id.in_(taken_ids)).all()]
 
 
 def get_students_by_class(class_id: int) -> list[StudentDTO]:
@@ -167,10 +179,23 @@ def delete_student(student_id: int) -> bool:
 
 
 def create_session(teacher_id: int, class_id: int) -> CreatedSession:
+    """
+    Создаёт сессию переклички на сегодня.
+
+    Защита от гонки: уникальный констрейнт (class_id, session_date) в БД
+    гарантирует, что даже если два учителя почти одновременно прошли проверку
+    get_available_classes, только один INSERT пройдёт — второй упадёт
+    с IntegrityError, которую мы превращаем в понятное исключение SessionAlreadyExists.
+    """
+    today = date.today()
     with get_db() as db:
-        s = AttendanceSession(teacher_id=teacher_id, class_id=class_id)
+        s = AttendanceSession(teacher_id=teacher_id, class_id=class_id, session_date=today)
         db.add(s)
-        db.flush()
+        try:
+            db.flush()
+        except IntegrityError:
+            db.rollback()
+            raise SessionAlreadyExists(f"Класс {class_id} уже отмечался сегодня.")
         return CreatedSession(id=s.id)
 
 
@@ -236,7 +261,7 @@ def get_active_sessions(today_date: date) -> list[CreatedSession]:
         return [CreatedSession(id=s.id)
                 for s in db.query(AttendanceSession).filter(
                     AttendanceSession.status == "active",
-                    func.date(AttendanceSession.start_time) == today_date).all()]
+                    AttendanceSession.session_date == today_date).all()]
 
 
 def get_sessions_for_report(target_date: date) -> list[SessionDTO]:
@@ -245,7 +270,7 @@ def get_sessions_for_report(target_date: date) -> list[SessionDTO]:
             joinedload(AttendanceSession.teacher),
             joinedload(AttendanceSession.class_),
             joinedload(AttendanceSession.records).joinedload(AttendanceRecord.student),
-        ).filter(func.date(AttendanceSession.start_time) == target_date,
+        ).filter(AttendanceSession.session_date == target_date,
                  AttendanceSession.status.in_(["completed", "auto_completed"])).all()
         return [SessionDTO(id=s.id,
                            teacher_name=s.teacher.name if s.teacher else "?",
@@ -256,40 +281,53 @@ def get_sessions_for_report(target_date: date) -> list[SessionDTO]:
 
 
 def set_absence_reason(student_id: int, class_id: int, target_date: date, reason: str) -> None:
+    """
+    Устанавливает причину отсутствия ученика за день.
+
+    Так как на класс — максимум одна сессия в день, здесь достаточно найти
+    эту единственную сессию (если она есть) и обновить запись в ней.
+    Раньше тут был цикл по нескольким сессиям дня — это больше не нужно.
+    """
     with get_db() as db:
-        sessions = db.query(AttendanceSession).filter(
+        sess = db.query(AttendanceSession).filter(
             AttendanceSession.class_id == class_id,
-            func.date(AttendanceSession.start_time) == target_date,
+            AttendanceSession.session_date == target_date,
             AttendanceSession.status.in_(["completed", "auto_completed"]),
-        ).all()
-        for sess in sessions:
-            db.query(AttendanceRecord).filter(
-                AttendanceRecord.session_id == sess.id,
-                AttendanceRecord.student_id == student_id,
-                AttendanceRecord.is_present.is_(False),
-            ).update({"reason": reason})
+        ).first()
+        if not sess:
+            return
+        db.query(AttendanceRecord).filter(
+            AttendanceRecord.session_id == sess.id,
+            AttendanceRecord.student_id == student_id,
+            AttendanceRecord.is_present.is_(False),
+        ).update({"reason": reason})
 
 
 def get_absent_students_today(class_id: int, today_date: date) -> dict[int, dict]:
+    """
+    Возвращает отсутствующих сегодня в классе.
+
+    Так как на класс — максимум одна сессия в день, здесь больше не нужно
+    объединять причины из нескольких сессий — берём записи единственной сессии.
+    """
     with get_db() as db:
-        sessions = db.query(AttendanceSession).options(
+        sess = db.query(AttendanceSession).options(
             joinedload(AttendanceSession.records).joinedload(AttendanceRecord.student),
         ).filter(AttendanceSession.class_id == class_id,
                  AttendanceSession.status.in_(["completed", "auto_completed"]),
-                 func.date(AttendanceSession.start_time) == today_date).all()
+                 AttendanceSession.session_date == today_date).first()
+
+        if not sess:
+            return {}
+
         result: dict[int, dict] = {}
-        for sess in sessions:
-            for rec in sess.records:
-                if not rec.is_present:
-                    sid = rec.student_id
-                    if sid not in result:
-                        result[sid] = {"name": rec.student.name, "reason": rec.reason}
-                    elif not result[sid]["reason"] and rec.reason:
-                        result[sid]["reason"] = rec.reason
+        for rec in sess.records:
+            if not rec.is_present:
+                result[rec.student_id] = {"name": rec.student.name, "reason": rec.reason}
         return result
 
 
-# ===== Новые функции для работы с заявками =====
+# ===== Функции для работы с заявками =====
 
 def get_pending_requests() -> list[dict]:
     """Возвращает список активных заявок на регистрацию с человекочитаемыми метками."""
@@ -341,37 +379,50 @@ def reject_request(req_id: int) -> None:
         if req:
             req.status = "rejected"
 
-# ===== Добавить в repositories.py (новые функции для директора и секретаря) =====
+
+# ===== Функции для директора и секретаря =====
 
 def is_class_done_today(class_id: int, today_date: date) -> bool:
     """Проверяет, завершена ли перекличка в классе сегодня (есть сессия completed/auto_completed)."""
     with get_db() as db:
         exists = db.query(AttendanceSession).filter(
             AttendanceSession.class_id == class_id,
-            func.date(AttendanceSession.start_time) == today_date,
+            AttendanceSession.session_date == today_date,
             AttendanceSession.status.in_(["completed", "auto_completed"]),
         ).first()
         return exists is not None
 
 
 def is_school_done_today(today_date: date) -> bool:
-    """Перекличка по школе готова, если каждый класс завершил её сегодня."""
-    classes = get_all_classes()
-    if not classes:
-        return False
-    return all(is_class_done_today(c.id, today_date) for c in classes)
+    """
+    Перекличка по школе готова, если не осталось классов с ЕЩЁ ИДУЩЕЙ (active)
+    перекличкой. Класс, который сегодня вообще не отмечался (например, уехал
+    на экскурсию) — это нормальный сценарий и не блокирует готовность.
+
+    Один запрос вместо N+1.
+    """
+    with get_db() as db:
+        classes_count = db.query(Class).count()
+        if classes_count == 0:
+            return False
+        active_exists = db.query(AttendanceSession).filter(
+            AttendanceSession.session_date == today_date,
+            AttendanceSession.status == "active",
+        ).first()
+        return active_exists is None
 
 
 def get_absence_reason_counts(target_date: date) -> dict[str, int]:
     """
     Считает количество отсутствующих сегодня по каждой причине (по всей школе),
-    плюс общий итог. Если причина не указана (None), относит к "❓ Без уважительной причины".
+    плюс общий итог. Если причина не указана (None), относит к DEFAULT_ABSENCE_REASON.
     """
+    from core.constants import DEFAULT_ABSENCE_REASON
     with get_db() as db:
         sessions = db.query(AttendanceSession).options(
             joinedload(AttendanceSession.records),
         ).filter(
-            func.date(AttendanceSession.start_time) == target_date,
+            AttendanceSession.session_date == target_date,
             AttendanceSession.status.in_(["completed", "auto_completed"]),
         ).all()
 
@@ -381,7 +432,7 @@ def get_absence_reason_counts(target_date: date) -> dict[str, int]:
             for rec in sess.records:
                 if not rec.is_present:
                     total += 1
-                    reason = rec.reason or "❓ Без уважительной причины"
+                    reason = rec.reason or DEFAULT_ABSENCE_REASON
                     counts[reason] = counts.get(reason, 0) + 1
 
         counts["__total__"] = total

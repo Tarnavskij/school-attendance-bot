@@ -6,15 +6,9 @@ from datetime import date
 from repositories import get_teacher_by_telegram_id, get_all_classes, get_absent_students_today, set_absence_reason
 from core.keyboards import BTN_MY_CLASS, build_menu_keyboard, back_to_menu_btn
 from core.roles import check_access, is_admin, Role
+from core.constants import ABSENCE_REASONS
 
 my_class_router = Router()
-
-ABSENCE_REASONS = [
-    "🤒 По болезни",
-    "📄 По заявлению",
-    "🏖 На оздоровлении",
-    "❓ Без уважительной причины",
-]
 
 
 @my_class_router.message(F.text == BTN_MY_CLASS)

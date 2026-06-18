@@ -6,16 +6,9 @@ from datetime import date
 from repositories import is_school_done_today, get_absence_reason_counts
 from core.keyboards import BTN_ROLL_STATUS
 from core.roles import check_access, Role
+from core.constants import ABSENCE_REASONS
 
 secretary_router = Router()
-
-# Причины должны совпадать с ABSENCE_REASONS из handlers/my_class.py
-REASON_ORDER = [
-    "📄 По заявлению",
-    "❓ Без уважительной причины",
-    "🏖 На оздоровлении",
-    "🤒 По болезни",
-]
 
 
 @secretary_router.message(F.text == BTN_ROLL_STATUS)
@@ -34,7 +27,7 @@ async def roll_status(message: Message) -> None:
     total = counts.get("__total__", 0)
 
     lines = ["✅ Перекличка готова.", f"\nВсего отсутствует: {total}"]
-    for reason in REASON_ORDER:
+    for reason in ABSENCE_REASONS:
         lines.append(f"{reason}: {counts.get(reason, 0)}")
 
     await message.answer("\n".join(lines))

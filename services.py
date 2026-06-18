@@ -4,7 +4,7 @@ from aiogram import Bot
 from repositories import (
     get_teacher_by_telegram_id, get_available_classes, get_students_by_class,
     create_session, add_records, toggle_student_presence, finish_session,
-    get_active_sessions, get_sessions_for_report, CreatedSession,
+    get_active_sessions, get_sessions_for_report, CreatedSession, SessionAlreadyExists,
 )
 from config import ADMIN_TELEGRAM_ID
 
@@ -18,7 +18,13 @@ class AttendanceService:
             return None, "Вы не зарегистрированы. Обратитесь к администратору."
         if class_id not in {c.id for c in get_available_classes(date.today())}:
             return None, "Этот класс уже занят или недоступен."
-        session = create_session(teacher.id, class_id)
+        try:
+            session = create_session(teacher.id, class_id)
+        except SessionAlreadyExists:
+            # Гонка: кто-то успел создать сессию для этого класса между проверкой
+            # get_available_classes и нашим INSERT. Сообщение то же самое,
+            # что и при обычной недоступности — пользователю не нужно знать детали.
+            return None, "Этот класс уже занят или недоступен."
         students = get_students_by_class(class_id)
         add_records(session.id, [s.id for s in students])
         return session, students
