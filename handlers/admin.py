@@ -32,11 +32,10 @@ class AddStudentStates(StatesGroup):
     waiting_name = State()
 
 
-# ===== Сводка по школе =====
-@admin_router.message(F.text == BTN_SCHOOL_SUMMARY)
+# ===== Сводка по школе (только для админа) =====
+# Добавлен фильтр is_admin, чтобы обработчик не перехватывал сообщения от директора/других ролей
+@admin_router.message(F.text == BTN_SCHOOL_SUMMARY, lambda msg: is_admin(msg.from_user.id))
 async def school_summary(message: Message) -> None:
-    if not is_admin(message.from_user.id):
-        return
     summary = ReportService.get_daily_summary(date.today())
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📥 Скачать Excel", callback_data="admin:excel")],
