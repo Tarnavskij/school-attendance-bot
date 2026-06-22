@@ -6,9 +6,14 @@ from aiogram.fsm.context import FSMContext
 from datetime import date
 
 from services import AttendanceService
-from repositories import get_available_classes, get_students_by_class, get_session_records, get_session_result, delete_session
+from repositories import (
+    get_available_classes, get_students_by_class,
+    get_session_records, get_session_result, delete_session,
+    get_teacher_by_telegram_id,
+)
 from core.keyboards import BTN_START_ROLL, build_menu_keyboard
 from core.roles import check_access, Role
+from helpers.session_card import get_today_session_card
 
 attendance_router = Router()
 
@@ -24,13 +29,19 @@ async def start_attendance(message: Message, state: FSMContext) -> None:
         await message.answer("У вас нет прав для проведения переклички.")
         return
 
+    # Проверяем — не провёл ли этот учитель уже перекличку сегодня
+    card = get_today_session_card(message.from_user.id)
+    if card:
+        # Перекличка уже есть — показываем карточку, кнопки не даём
+        await message.answer(card)
+        return
+
     available = get_available_classes(date.today())
     if not available:
         await message.answer("Все классы уже отмечены на сегодня.")
         return
 
     kb = _build_class_keyboard(available)
-    # Единственное сообщение на весь поток переклички
     sent = await message.answer("🏫 Выберите класс для переклички:", reply_markup=kb)
     await state.update_data(flow_msg_id=sent.message_id, chat_id=sent.chat.id)
     await state.set_state(AttendanceStates.choosing_class)
@@ -53,7 +64,10 @@ async def text_during_class_choice(message: Message) -> None:
 @attendance_router.callback_query(AttendanceStates.choosing_class, F.data == "att:cancel_flow")
 async def cancel_flow(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.edit_text("Перекличка отменена.")
-    await callback.message.answer("Выберите действие:", reply_markup=build_menu_keyboard(callback.from_user.id))
+    await callback.message.answer(
+        "Выберите действие:",
+        reply_markup=build_menu_keyboard(callback.from_user.id),
+    )
     await state.clear()
     await callback.answer()
 
@@ -65,7 +79,10 @@ async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
 
     if session is None:
         await callback.message.edit_text(result)
-        await callback.message.answer("Выберите действие:", reply_markup=build_menu_keyboard(callback.from_user.id))
+        await callback.message.answer(
+            "Выберите действие:",
+            reply_markup=build_menu_keyboard(callback.from_user.id),
+        )
         await state.clear()
         await callback.answer()
         return
@@ -107,7 +124,10 @@ async def cancel_marking(callback: CallbackQuery, state: FSMContext) -> None:
     session_id = int(callback.data.split(":")[-1])
     delete_session(session_id)
     await callback.message.edit_text("Перекличка отменена.")
-    await callback.message.answer("Выберите действие:", reply_markup=build_menu_keyboard(callback.from_user.id))
+    await callback.message.answer(
+        "Выберите действие:",
+        reply_markup=build_menu_keyboard(callback.from_user.id),
+    )
     await state.clear()
     await callback.answer()
 
@@ -119,22 +139,25 @@ async def submit_attendance(callback: CallbackQuery, state: FSMContext) -> None:
     result = get_session_result(session_id)
 
     if result:
-        lines = [f"📋 Перекличка завершена — класс {result.class_name}"]
+        lines = [f"📋 Ваша перекличка сегодня — класс {result.class_name}"]
         if result.absent:
             lines.append(f"\nОтсутствуют ({len(result.absent)}):")
             for name, reason in result.absent:
                 reason_str = f" — {reason}" if reason else ""
                 lines.append(f"  • {name}{reason_str}")
         else:
-            lines.append("\n✅ Все присутствуют")
+            lines.append("\n✅ Все присутствовали")
         card_text = "\n".join(lines)
     else:
         card_text = "✅ Перекличка завершена."
 
-    # Итоговая карточка остаётся в чате — редактируем то же сообщение
+    # Итоговая карточка остаётся — редактируем то же сообщение
     await callback.message.edit_text(card_text, reply_markup=None)
-    # Возвращаем reply-клавиатуру отдельным коротким сообщением
-    await callback.message.answer("Выберите действие:", reply_markup=build_menu_keyboard(callback.from_user.id))
+    # Возвращаем меню отдельным сообщением
+    await callback.message.answer(
+        "Выберите действие:",
+        reply_markup=build_menu_keyboard(callback.from_user.id),
+    )
     await state.clear()
     await callback.answer("Готово!")
 

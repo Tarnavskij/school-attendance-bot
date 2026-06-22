@@ -455,3 +455,28 @@ def reset_today_sessions() -> int:
             db.delete(s)
         return count
 
+# ===== Добавить в конец repositories.py =====
+
+def get_teacher_session_today(teacher_id: int, today_date: date) -> SessionDTO | None:
+    """
+    Возвращает SessionDTO сессии этого учителя за сегодня (если есть).
+    Используется для проверки: провёл ли учитель уже перекличку.
+    """
+    with get_db() as db:
+        s = db.query(AttendanceSession).options(
+            joinedload(AttendanceSession.teacher),
+            joinedload(AttendanceSession.class_),
+            joinedload(AttendanceSession.records).joinedload(AttendanceRecord.student),
+        ).filter(
+            AttendanceSession.teacher_id == teacher_id,
+            AttendanceSession.session_date == today_date,
+        ).first()
+        if not s:
+            return None
+        return SessionDTO(
+            id=s.id,
+            teacher_name=s.teacher.name if s.teacher else "?",
+            class_name=s.class_.name if s.class_ else "?",
+            end_time=s.end_time,
+            absent=[(r.student.name, r.reason) for r in s.records if not r.is_present],
+        )

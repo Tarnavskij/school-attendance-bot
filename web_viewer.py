@@ -200,6 +200,12 @@ TEMPLATE = """<!DOCTYPE html>
     border: 1px solid rgba(255,69,58,0.3);
   }
 
+  .badge-already {
+    background: rgba(255,159,10,0.15);
+    color: #ff9f0a;
+    border: 1px solid rgba(255,159,10,0.3);
+  }
+
   .empty {
     text-align: center;
     padding: 60px 20px;
@@ -235,6 +241,19 @@ TEMPLATE = """<!DOCTYPE html>
     font-size: 13px;
     color: rgba(255,255,255,0.4);
     margin-top: 4px;
+  }
+
+  .alert {
+    padding: 12px 16px;
+    border-radius: 12px;
+    font-size: 14px;
+    margin-bottom: 16px;
+  }
+
+  .alert-warning {
+    background: rgba(255,159,10,0.15);
+    border: 1px solid rgba(255,159,10,0.3);
+    color: #ff9f0a;
   }
 </style>
 </head>
@@ -328,18 +347,31 @@ TEMPLATE = """<!DOCTYPE html>
         <td>{{ r.role_label }}</td>
         <td>{{ r.class_name or '—' }}</td>
         <td>
-          <span class="badge badge-{{ r.status }}">
-            {{ '⏳ Ожидает' if r.status == 'pending' else ('✅ Одобрена' if r.status == 'approved' else '❌ Отклонена') }}
-          </span>
+          {% if r.status == 'pending' and r.already_exists %}
+            <span class="badge badge-already">⚠️ Уже в системе</span>
+          {% elif r.status == 'pending' %}
+            <span class="badge badge-pending">⏳ Ожидает</span>
+          {% elif r.status == 'approved' %}
+            <span class="badge badge-approved">✅ Одобрена</span>
+          {% else %}
+            <span class="badge badge-rejected">❌ Отклонена</span>
+          {% endif %}
         </td>
         <td>
           {% if r.status == 'pending' %}
-          <form method="post" action="/requests/{{ r.id }}/approve" style="display:inline">
-            <button type="submit" class="btn btn-success btn-sm">✅ Одобрить</button>
-          </form>
-          <form method="post" action="/requests/{{ r.id }}/reject" style="display:inline;margin-left:6px">
-            <button type="submit" class="btn btn-danger btn-sm">❌ Отклонить</button>
-          </form>
+            {% if r.already_exists %}
+              <span style="color:rgba(255,255,255,0.3);font-size:13px">Пользователь уже существует</span>
+              <form method="post" action="/requests/{{ r.id }}/reject" style="display:inline;margin-left:6px">
+                <button type="submit" class="btn btn-danger btn-sm">❌ Отклонить</button>
+              </form>
+            {% else %}
+              <form method="post" action="/requests/{{ r.id }}/approve" style="display:inline">
+                <button type="submit" class="btn btn-success btn-sm">✅ Одобрить</button>
+              </form>
+              <form method="post" action="/requests/{{ r.id }}/reject" style="display:inline;margin-left:6px">
+                <button type="submit" class="btn btn-danger btn-sm">❌ Отклонить</button>
+              </form>
+            {% endif %}
           {% else %}
           <span style="color:rgba(255,255,255,0.25);font-size:13px">Обработана</span>
           {% endif %}
@@ -414,6 +446,12 @@ def requests_page():
     from core.roles import ROLE_LABELS
     db = SessionLocal()
     reqs = db.query(RegistrationRequest).order_by(RegistrationRequest.created_at.desc()).all()
+
+    # Для каждой pending-заявки проверяем — не существует ли уже такой пользователь
+    existing_ids = set(
+        t.telegram_id for t in db.query(Teacher.telegram_id).all()
+    )
+
     result = [{
         "id": r.id,
         "name": r.name,
@@ -421,6 +459,7 @@ def requests_page():
         "role_label": ROLE_LABELS.get(r.role, r.role),
         "class_name": r.class_name,
         "status": r.status,
+        "already_exists": r.telegram_id in existing_ids,
     } for r in reqs]
     db.close()
     return render_template_string(TEMPLATE, page="requests", requests=result,
@@ -433,6 +472,15 @@ def approve_request(req_id: int):
     db = SessionLocal()
     req = db.query(RegistrationRequest).filter(RegistrationRequest.id == req_id).first()
     if req and req.status == "pending":
+        # Защита от дубликата — проверяем перед INSERT
+        already = db.query(Teacher).filter(Teacher.telegram_id == req.telegram_id).first()
+        if already:
+            # Пользователь уже есть — просто закрываем заявку
+            req.status = "approved"
+            db.commit()
+            db.close()
+            return redirect(url_for("requests_page"))
+
         class_id = None
         if req.class_name:
             c = db.query(Class).filter(Class.name == req.class_name).first()
