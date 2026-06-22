@@ -437,3 +437,21 @@ def get_absence_reason_counts(target_date: date) -> dict[str, int]:
 
         counts["__total__"] = total
         return counts
+
+
+def reset_today_sessions() -> int:
+    """
+    Удаляет все сессии переклички за сегодня (любого статуса).
+    Возвращает количество удалённых сессий.
+    Используется администратором для перезапуска переклички.
+    """
+    today = date.today()
+    with get_db() as db:
+        sessions = db.query(AttendanceSession).filter(
+            AttendanceSession.session_date == today
+        ).all()
+        count = len(sessions)
+        for s in sessions:
+            db.delete(s)
+        return count
+

@@ -17,6 +17,7 @@ from repositories import (
     create_student, delete_student,
     get_sessions_for_report, get_teacher_card,
     get_pending_requests, approve_request, reject_request,
+    reset_today_sessions,
 )
 from database import Teacher, SessionLocal
 from services import ReportService
@@ -39,6 +40,7 @@ async def school_summary(message: Message) -> None:
     summary = ReportService.get_daily_summary(date.today())
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📥 Скачать Excel", callback_data="admin:excel")],
+        [InlineKeyboardButton(text="🔴 Перезапуск переклички", callback_data="admin:reset_confirm")],
     ])
     await message.answer(summary, reply_markup=kb)
 
@@ -52,6 +54,51 @@ async def download_excel(callback: CallbackQuery) -> None:
     file_bytes = _build_excel(sessions, date.today().strftime("%Y-%m-%d"))
     document = BufferedInputFile(file_bytes, filename=f"attendance_{date.today()}.xlsx")
     await callback.message.answer_document(document, caption=f"📅 Сводка за {date.today().strftime('%d.%m.%Y')}")
+
+
+# ===== Перезапуск переклички =====
+@admin_router.callback_query(F.data == "admin:reset_confirm")
+async def reset_confirm(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔴 Да, сбросить всё", callback_data="admin:reset_execute")],
+        [InlineKeyboardButton(text="Отмена", callback_data="admin:reset_cancel")],
+    ])
+    await callback.message.edit_text(
+        "⚠️ Сбросить все перекличи за сегодня?\n\n"
+        "Все сессии будут удалены, учителя смогут начать заново.\n"
+        "Это действие необратимо.",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data == "admin:reset_cancel")
+async def reset_cancel(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        return
+    summary = ReportService.get_daily_summary(date.today())
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📥 Скачать Excel", callback_data="admin:excel")],
+        [InlineKeyboardButton(text="🔴 Перезапуск переклички", callback_data="admin:reset_confirm")],
+    ])
+    await callback.message.edit_text(summary, reply_markup=kb)
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data == "admin:reset_execute")
+async def reset_execute(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        return
+    count = reset_today_sessions()
+    await callback.message.edit_text(
+        f"✅ Сброс выполнен. Удалено сессий: {count}.\n"
+        f"Учителя могут начинать перекличку заново.",
+        reply_markup=None,
+    )
+    await callback.message.answer("Выберите действие:", reply_markup=build_menu_keyboard(callback.from_user.id))
+    await callback.answer()
 
 
 def _build_excel(sessions, date_str: str) -> bytes:

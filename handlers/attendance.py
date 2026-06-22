@@ -23,52 +23,61 @@ async def start_attendance(message: Message, state: FSMContext) -> None:
     if not check_access(message.from_user.id, [Role.SUBJECT_TEACHER, Role.CLASS_TEACHER]):
         await message.answer("У вас нет прав для проведения переклички.")
         return
+
     available = get_available_classes(date.today())
     if not available:
-        await message.answer("Все классы уже заняты на сегодня.")
+        await message.answer("Все классы уже отмечены на сегодня.")
         return
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        *[[InlineKeyboardButton(text=c.name, callback_data=f"att:class:{c.id}")] for c in available],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="att:cancel_class")],
-    ])
-    sent = await message.answer("Выберите класс:", reply_markup=kb)
-    await state.update_data(class_msg_id=sent.message_id)
+
+    kb = _build_class_keyboard(available)
+    # Единственное сообщение на весь поток переклички
+    sent = await message.answer("🏫 Выберите класс для переклички:", reply_markup=kb)
+    await state.update_data(flow_msg_id=sent.message_id, chat_id=sent.chat.id)
     await state.set_state(AttendanceStates.choosing_class)
+
+
+def _build_class_keyboard(available_classes) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        *[[InlineKeyboardButton(text=c.name, callback_data=f"att:class:{c.id}")]
+          for c in available_classes],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="att:cancel_flow")],
+    ])
 
 
 # ── Блокировка случайного текста при выборе класса ──
 @attendance_router.message(AttendanceStates.choosing_class)
 async def text_during_class_choice(message: Message) -> None:
-    await message.answer("Пожалуйста, выберите класс из списка кнопок или нажмите «Отмена».")
+    await message.delete()
 
 
-@attendance_router.callback_query(AttendanceStates.choosing_class, F.data == "att:cancel_class")
-async def cancel_class_choice(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.message.delete()
+@attendance_router.callback_query(AttendanceStates.choosing_class, F.data == "att:cancel_flow")
+async def cancel_flow(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.message.edit_text("Перекличка отменена.")
     await callback.message.answer("Выберите действие:", reply_markup=build_menu_keyboard(callback.from_user.id))
     await state.clear()
-    await callback.answer("Отменено")
+    await callback.answer()
 
 
 @attendance_router.callback_query(AttendanceStates.choosing_class, F.data.startswith("att:class:"))
 async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
     class_id = int(callback.data.split(":")[-1])
     session, result = AttendanceService.start_attendance(callback.from_user.id, class_id)
+
     if session is None:
-        await callback.message.answer(result)
-        await callback.answer()
+        await callback.message.edit_text(result)
+        await callback.message.answer("Выберите действие:", reply_markup=build_menu_keyboard(callback.from_user.id))
         await state.clear()
+        await callback.answer()
         return
-    data = await state.get_data()
-    await _safe_delete(callback, data.get("class_msg_id"))
+
     await state.update_data(session_id=session.id, class_id=class_id)
     students = get_students_by_class(class_id)
     kb = _build_marking_keyboard(students, session.id, [])
-    sent = await callback.message.answer(
-        "Нажмите на ученика, чтобы отметить отсутствующим.\nЗавершите кнопкой «Отправить».",
+
+    await callback.message.edit_text(
+        "✅ — присутствует   ❌ — отсутствует\n\nНажмите на ученика, чтобы изменить статус:",
         reply_markup=kb,
     )
-    await state.update_data(marking_msg_id=sent.message_id)
     await state.set_state(AttendanceStates.marking)
     await callback.answer()
 
@@ -76,7 +85,7 @@ async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
 # ── Блокировка случайного текста при отметке ──
 @attendance_router.message(AttendanceStates.marking)
 async def text_during_marking(message: Message) -> None:
-    await message.answer("Используйте кнопки для отметки отсутствующих. Завершите кнопкой «Отправить».")
+    await message.delete()
 
 
 @attendance_router.callback_query(AttendanceStates.marking, F.data.startswith("att:toggle:"))
@@ -97,11 +106,10 @@ async def toggle_student(callback: CallbackQuery, state: FSMContext) -> None:
 async def cancel_marking(callback: CallbackQuery, state: FSMContext) -> None:
     session_id = int(callback.data.split(":")[-1])
     delete_session(session_id)
-    data = await state.get_data()
-    await _safe_delete(callback, data.get("marking_msg_id"))
+    await callback.message.edit_text("Перекличка отменена.")
     await callback.message.answer("Выберите действие:", reply_markup=build_menu_keyboard(callback.from_user.id))
     await state.clear()
-    await callback.answer("Отменено")
+    await callback.answer()
 
 
 @attendance_router.callback_query(AttendanceStates.marking, F.data.startswith("att:submit:"))
@@ -109,17 +117,24 @@ async def submit_attendance(callback: CallbackQuery, state: FSMContext) -> None:
     session_id = int(callback.data.split(":")[-1])
     AttendanceService.complete_session(session_id)
     result = get_session_result(session_id)
+
     if result:
-        text = f"✅ Перекличка в классе {result.class_name} завершена."
+        lines = [f"📋 Перекличка завершена — класс {result.class_name}"]
         if result.absent:
-            text += f"\nОтсутствуют: {', '.join(name for name, _ in result.absent)}"
+            lines.append(f"\nОтсутствуют ({len(result.absent)}):")
+            for name, reason in result.absent:
+                reason_str = f" — {reason}" if reason else ""
+                lines.append(f"  • {name}{reason_str}")
         else:
-            text += "\nОтсутствующих нет."
+            lines.append("\n✅ Все присутствуют")
+        card_text = "\n".join(lines)
     else:
-        text = "✅ Перекличка завершена."
-    data = await state.get_data()
-    await _safe_delete(callback, data.get("marking_msg_id"))
-    await callback.message.answer(text, reply_markup=build_menu_keyboard(callback.from_user.id))
+        card_text = "✅ Перекличка завершена."
+
+    # Итоговая карточка остаётся в чате — редактируем то же сообщение
+    await callback.message.edit_text(card_text, reply_markup=None)
+    # Возвращаем reply-клавиатуру отдельным коротким сообщением
+    await callback.message.answer("Выберите действие:", reply_markup=build_menu_keyboard(callback.from_user.id))
     await state.clear()
     await callback.answer("Готово!")
 
@@ -138,11 +153,3 @@ def _build_marking_keyboard(students, session_id: int, records: list) -> InlineK
         InlineKeyboardButton(text="❌ Отмена", callback_data=f"att:cancel:{session_id}"),
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-async def _safe_delete(callback: CallbackQuery, message_id: int | None) -> None:
-    if message_id:
-        try:
-            await callback.bot.delete_message(callback.message.chat.id, message_id)
-        except Exception:
-            pass
