@@ -17,12 +17,16 @@ from repositories import (
     create_student, delete_student,
     get_sessions_for_report, get_teacher_card,
     get_pending_requests, approve_request, reject_request,
-    reset_today_sessions,
+    reset_today_sessions, get_all_schools,
 )
 from database import Teacher, SessionLocal
 from services import ReportService
-from core.keyboards import BTN_SCHOOL_SUMMARY, BTN_TEACHER_LIST, BTN_STUDENTS, build_menu_keyboard
+from core.keyboards import (
+    BTN_SCHOOL_SUMMARY, BTN_TEACHER_LIST, BTN_STUDENTS, BTN_SCHOOLS,
+    build_menu_keyboard,
+)
 from core.roles import is_admin, ALL_ROLES, ROLE_LABELS, Role
+from core.school_context import set_current_school_id, get_current_school_id, get_current_school_name
 from config import ADMIN_TELEGRAM_ID
 
 admin_router = Router()
@@ -33,7 +37,6 @@ class AddStudentStates(StatesGroup):
 
 
 # ===== Сводка по школе (только для админа) =====
-# Добавлен фильтр is_admin, чтобы обработчик не перехватывал сообщения от директора/других ролей
 @admin_router.message(F.text == BTN_SCHOOL_SUMMARY, lambda msg: is_admin(msg.from_user.id))
 async def school_summary(message: Message) -> None:
     summary = ReportService.get_daily_summary(date.today())
@@ -143,7 +146,8 @@ async def _show_teacher_list(target, edit: bool = False) -> None:
 def _teacher_list_keyboard(teachers) -> InlineKeyboardMarkup:
     rows = []
     for t in teachers:
-        label = f"{t.name} · {ROLE_LABELS.get(t.role, t.role)} · {t.class_name or 'нет'}"
+        school_part = f" · 🏫 {t.school_name}" if t.school_name else ""
+        label = f"{t.name} · {ROLE_LABELS.get(t.role, t.role)} · {t.class_name or 'нет'}{school_part}"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"admin:teacher:{t.id}")])
     rows.append([InlineKeyboardButton(text="📩 Заявки", callback_data="admin:requests")])
     rows.append([InlineKeyboardButton(text="🔙 Назад в меню", callback_data="nav:menu")])
@@ -252,7 +256,8 @@ async def _show_teacher_card(message, teacher_id: int) -> None:
         return
     text = (f"👤 {t.name} (ID: {t.telegram_id})\n"
             f"Роль: {ROLE_LABELS.get(t.role, t.role)}\n"
-            f"Класс: {t.class_name or 'нет'}")
+            f"Класс: {t.class_name or 'нет'}\n"
+            f"🏫 Школа: {t.school_name or 'не указана'}")
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔄 Сменить роль",    callback_data=f"admin:chrole:{teacher_id}")],
         [InlineKeyboardButton(text="🏫 Назначить класс", callback_data=f"admin:setclass:{teacher_id}")],
@@ -462,6 +467,54 @@ async def delete_student_execute(callback: CallbackQuery) -> None:
     delete_student(student_id)
     await callback.answer("Ученик удалён.")
     await _show_student_list(callback.message, class_id)
+
+
+# ===== Школы (администратор) =====
+@admin_router.message(F.text == BTN_SCHOOLS)
+async def list_schools(message: Message) -> None:
+    if not is_admin(message.from_user.id):
+        return
+    schools = get_all_schools()
+    if not schools:
+        await message.answer("Нет зарегистрированных школ.")
+        return
+
+    # Показываем текущую школу
+    current_id = get_current_school_id()
+    current_name = get_current_school_name() or "неизвестно"
+    text = f"🏫 Текущая школа: {current_name} (ID: {current_id})\n\nВыберите школу из списка:"
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        *[
+            [InlineKeyboardButton(
+                text=f"{'🔵 ' if s['id'] == current_id else ''}{s['name']} (ID: {s['id']})",
+                callback_data=f"admin:switch_school:{s['id']}"
+            )]
+            for s in schools
+        ],
+        [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="nav:menu")],
+    ])
+    await message.answer(text, reply_markup=kb)
+
+
+@admin_router.callback_query(F.data.startswith("admin:switch_school:"))
+async def switch_school(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        return
+    school_id = int(callback.data.split(":")[-1])
+    set_current_school_id(school_id)
+    school_name = get_current_school_name() or f"Школа {school_id}"
+
+    # Удаляем сообщение со списком школ
+    await callback.message.delete()
+    # Сообщаем о переключении
+    await callback.message.answer(f"✅ Активная школа: {school_name} (ID: {school_id})")
+    # Отправляем обновлённое меню
+    await callback.message.answer(
+        "Выберите действие:",
+        reply_markup=build_menu_keyboard(callback.from_user.id)
+    )
+    await callback.answer()
 
 
 @admin_router.message(Command("restore_admin"))

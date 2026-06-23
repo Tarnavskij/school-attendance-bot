@@ -29,10 +29,8 @@ async def start_attendance(message: Message, state: FSMContext) -> None:
         await message.answer("У вас нет прав для проведения переклички.")
         return
 
-    # Проверяем — не провёл ли этот учитель уже перекличку сегодня
     card = get_today_session_card(message.from_user.id)
     if card:
-        # Перекличка уже есть — показываем карточку, кнопки не даём
         await message.answer(card)
         return
 
@@ -48,11 +46,14 @@ async def start_attendance(message: Message, state: FSMContext) -> None:
 
 
 def _build_class_keyboard(available_classes) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        *[[InlineKeyboardButton(text=c.name, callback_data=f"att:class:{c.id}")]
-          for c in available_classes],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="att:cancel_flow")],
-    ])
+    """Строит сетку из кнопок классов (по 2 в ряд) + кнопка Отмена."""
+    buttons = []
+    for c in available_classes:
+        buttons.append(InlineKeyboardButton(text=c.name, callback_data=f"att:class:{c.id}"))
+    # Разбиваем на ряды по 2 кнопки
+    rows = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
+    rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="att:cancel_flow")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # ── Блокировка случайного текста при выборе класса ──
@@ -151,9 +152,7 @@ async def submit_attendance(callback: CallbackQuery, state: FSMContext) -> None:
     else:
         card_text = "✅ Перекличка завершена."
 
-    # Итоговая карточка остаётся — редактируем то же сообщение
     await callback.message.edit_text(card_text, reply_markup=None)
-    # Возвращаем меню отдельным сообщением
     await callback.message.answer(
         "Выберите действие:",
         reply_markup=build_menu_keyboard(callback.from_user.id),

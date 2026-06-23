@@ -5,8 +5,8 @@ from datetime import date, datetime
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
-from database import SessionLocal, Teacher, Class, Student, AttendanceSession, AttendanceRecord, RegistrationRequest
-
+from database import SessionLocal, Teacher, Class, Student, AttendanceSession, AttendanceRecord, RegistrationRequest, School
+from core.school_context import get_current_school_id
 
 @contextmanager
 def get_db():
@@ -29,6 +29,7 @@ class TeacherDTO:
     role: str
     class_id: int | None
     class_name: str | None
+    school_name: str | None          # <-- новое поле
 
 
 @dataclass
@@ -58,6 +59,7 @@ class SessionDTO:
     class_name: str
     end_time: datetime | None
     absent: list[tuple[str, str | None]]
+    school_name: str | None          # <-- новое поле
 
 
 @dataclass
@@ -66,50 +68,73 @@ class CreatedSession:
 
 
 class SessionAlreadyExists(Exception):
-    """Поднимается, когда на класс за сегодня уже есть сессия (в т.ч. гонка двух учителей)."""
     pass
 
 
 def get_teacher_by_telegram_id(telegram_id: int) -> TeacherDTO | None:
     with get_db() as db:
-        t = db.query(Teacher).filter(Teacher.telegram_id == telegram_id).first()
+        t = db.query(Teacher).options(joinedload(Teacher.school)).filter(
+            Teacher.telegram_id == telegram_id,
+            Teacher.school_id == get_current_school_id()
+        ).first()
         if not t:
             return None
-        return TeacherDTO(id=t.id, telegram_id=t.telegram_id, name=t.name,
-                          role=t.role, class_id=t.class_id,
-                          class_name=t.class_.name if t.class_ else None)
+        return TeacherDTO(
+            id=t.id, telegram_id=t.telegram_id, name=t.name,
+            role=t.role, class_id=t.class_id,
+            class_name=t.class_.name if t.class_ else None,
+            school_name=t.school.name if t.school else None
+        )
 
 
 def get_all_teachers() -> list[TeacherDTO]:
     with get_db() as db:
-        return [TeacherDTO(id=t.id, telegram_id=t.telegram_id, name=t.name,
-                           role=t.role, class_id=t.class_id,
-                           class_name=t.class_.name if t.class_ else None)
-                for t in db.query(Teacher).all()]
+        return [
+            TeacherDTO(
+                id=t.id, telegram_id=t.telegram_id, name=t.name,
+                role=t.role, class_id=t.class_id,
+                class_name=t.class_.name if t.class_ else None,
+                school_name=t.school.name if t.school else None
+            )
+            for t in db.query(Teacher).options(joinedload(Teacher.school)).filter(
+                Teacher.school_id == get_current_school_id()
+            ).all()
+        ]
 
 
 def create_teacher(telegram_id: int, name: str, role: str = "subject_teacher", class_id: int | None = None) -> TeacherDTO:
     with get_db() as db:
-        t = Teacher(telegram_id=telegram_id, name=name, role=role, class_id=class_id)
+        t = Teacher(telegram_id=telegram_id, name=name, role=role, class_id=class_id,
+                    school_id=get_current_school_id())
         db.add(t)
         db.flush()
-        return TeacherDTO(id=t.id, telegram_id=t.telegram_id, name=t.name,
-                          role=t.role, class_id=t.class_id, class_name=None)
+        return TeacherDTO(
+            id=t.id, telegram_id=t.telegram_id, name=t.name,
+            role=t.role, class_id=t.class_id, class_name=None,
+            school_name=None
+        )
 
 
 def get_teacher_card(teacher_id: int) -> TeacherDTO | None:
     with get_db() as db:
-        t = db.query(Teacher).filter(Teacher.id == teacher_id).first()
+        t = db.query(Teacher).options(joinedload(Teacher.school)).filter(
+            Teacher.id == teacher_id,
+            Teacher.school_id == get_current_school_id()
+        ).first()
         if not t:
             return None
-        return TeacherDTO(id=t.id, telegram_id=t.telegram_id, name=t.name,
-                          role=t.role, class_id=t.class_id,
-                          class_name=t.class_.name if t.class_ else None)
+        return TeacherDTO(
+            id=t.id, telegram_id=t.telegram_id, name=t.name,
+            role=t.role, class_id=t.class_id,
+            class_name=t.class_.name if t.class_ else None,
+            school_name=t.school.name if t.school else None
+        )
 
 
 def update_teacher_role(teacher_id: int, new_role: str) -> bool:
     with get_db() as db:
-        t = db.query(Teacher).filter(Teacher.id == teacher_id).first()
+        t = db.query(Teacher).filter(Teacher.id == teacher_id,
+                                     Teacher.school_id == get_current_school_id()).first()
         if not t:
             return False
         t.role = new_role
@@ -118,7 +143,8 @@ def update_teacher_role(teacher_id: int, new_role: str) -> bool:
 
 def update_teacher_class(teacher_id: int, class_id: int | None) -> bool:
     with get_db() as db:
-        t = db.query(Teacher).filter(Teacher.id == teacher_id).first()
+        t = db.query(Teacher).filter(Teacher.id == teacher_id,
+                                     Teacher.school_id == get_current_school_id()).first()
         if not t:
             return False
         t.class_id = class_id
@@ -127,7 +153,8 @@ def update_teacher_class(teacher_id: int, class_id: int | None) -> bool:
 
 def delete_teacher(teacher_id: int) -> bool:
     with get_db() as db:
-        t = db.query(Teacher).filter(Teacher.id == teacher_id).first()
+        t = db.query(Teacher).filter(Teacher.id == teacher_id,
+                                     Teacher.school_id == get_current_school_id()).first()
         if not t:
             return False
         db.delete(t)
@@ -136,34 +163,31 @@ def delete_teacher(teacher_id: int) -> bool:
 
 def get_all_classes() -> list[ClassDTO]:
     with get_db() as db:
-        return [ClassDTO(id=c.id, name=c.name) for c in db.query(Class).all()]
+        return [ClassDTO(id=c.id, name=c.name)
+                for c in db.query(Class).filter(Class.school_id == get_current_school_id()).all()]
 
 
 def get_available_classes(today_date: date) -> list[ClassDTO]:
-    """
-    Класс доступен для выбора, если по нему СЕГОДНЯ ещё нет ни одной сессии
-    (в любом статусе — active, completed или auto_completed).
-
-    Раньше здесь проверялся только status == "active", что позволяло провести
-    повторную перекличку в уже отмеченном классе. Теперь — максимум одна
-    сессия на класс в день, точка.
-    """
     with get_db() as db:
         taken_ids = (db.query(AttendanceSession.class_id)
-                    .filter(AttendanceSession.session_date == today_date))
+                    .filter(AttendanceSession.session_date == today_date,
+                            AttendanceSession.school_id == get_current_school_id()))
         return [ClassDTO(id=c.id, name=c.name)
-                for c in db.query(Class).filter(~Class.id.in_(taken_ids)).all()]
+                for c in db.query(Class).filter(Class.school_id == get_current_school_id(),
+                                                ~Class.id.in_(taken_ids)).all()]
 
 
 def get_students_by_class(class_id: int) -> list[StudentDTO]:
     with get_db() as db:
         return [StudentDTO(id=s.id, name=s.name, class_id=s.class_id)
-                for s in db.query(Student).filter(Student.class_id == class_id).order_by(Student.name).all()]
+                for s in db.query(Student).filter(Student.class_id == class_id,
+                                                  Student.school_id == get_current_school_id())
+                .order_by(Student.name).all()]
 
 
 def create_student(name: str, class_id: int) -> StudentDTO:
     with get_db() as db:
-        s = Student(name=name, class_id=class_id)
+        s = Student(name=name, class_id=class_id, school_id=get_current_school_id())
         db.add(s)
         db.flush()
         return StudentDTO(id=s.id, name=s.name, class_id=s.class_id)
@@ -171,7 +195,8 @@ def create_student(name: str, class_id: int) -> StudentDTO:
 
 def delete_student(student_id: int) -> bool:
     with get_db() as db:
-        s = db.query(Student).filter(Student.id == student_id).first()
+        s = db.query(Student).filter(Student.id == student_id,
+                                     Student.school_id == get_current_school_id()).first()
         if not s:
             return False
         db.delete(s)
@@ -179,17 +204,10 @@ def delete_student(student_id: int) -> bool:
 
 
 def create_session(teacher_id: int, class_id: int) -> CreatedSession:
-    """
-    Создаёт сессию переклички на сегодня.
-
-    Защита от гонки: уникальный констрейнт (class_id, session_date) в БД
-    гарантирует, что даже если два учителя почти одновременно прошли проверку
-    get_available_classes, только один INSERT пройдёт — второй упадёт
-    с IntegrityError, которую мы превращаем в понятное исключение SessionAlreadyExists.
-    """
     today = date.today()
     with get_db() as db:
-        s = AttendanceSession(teacher_id=teacher_id, class_id=class_id, session_date=today)
+        s = AttendanceSession(teacher_id=teacher_id, class_id=class_id, session_date=today,
+                              school_id=get_current_school_id())
         db.add(s)
         try:
             db.flush()
@@ -245,15 +263,19 @@ def get_session_result(session_id: int) -> SessionDTO | None:
         s = db.query(AttendanceSession).options(
             joinedload(AttendanceSession.teacher),
             joinedload(AttendanceSession.class_),
+            joinedload(AttendanceSession.school),               # <-- загружаем школу
             joinedload(AttendanceSession.records).joinedload(AttendanceRecord.student),
         ).filter(AttendanceSession.id == session_id).first()
         if not s:
             return None
-        return SessionDTO(id=s.id,
-                          teacher_name=s.teacher.name if s.teacher else "?",
-                          class_name=s.class_.name if s.class_ else "?",
-                          end_time=s.end_time,
-                          absent=[(r.student.name, r.reason) for r in s.records if not r.is_present])
+        return SessionDTO(
+            id=s.id,
+            teacher_name=s.teacher.name if s.teacher else "?",
+            class_name=s.class_.name if s.class_ else "?",
+            end_time=s.end_time,
+            absent=[(r.student.name, r.reason) for r in s.records if not r.is_present],
+            school_name=s.school.name if s.school else None
+        )
 
 
 def get_active_sessions(today_date: date) -> list[CreatedSession]:
@@ -261,7 +283,8 @@ def get_active_sessions(today_date: date) -> list[CreatedSession]:
         return [CreatedSession(id=s.id)
                 for s in db.query(AttendanceSession).filter(
                     AttendanceSession.status == "active",
-                    AttendanceSession.session_date == today_date).all()]
+                    AttendanceSession.session_date == today_date,
+                    AttendanceSession.school_id == get_current_school_id()).all()]
 
 
 def get_sessions_for_report(target_date: date) -> list[SessionDTO]:
@@ -269,30 +292,27 @@ def get_sessions_for_report(target_date: date) -> list[SessionDTO]:
         sessions = db.query(AttendanceSession).options(
             joinedload(AttendanceSession.teacher),
             joinedload(AttendanceSession.class_),
+            joinedload(AttendanceSession.school),
             joinedload(AttendanceSession.records).joinedload(AttendanceRecord.student),
         ).filter(AttendanceSession.session_date == target_date,
-                 AttendanceSession.status.in_(["completed", "auto_completed"])).all()
+                 AttendanceSession.status.in_(["completed", "auto_completed"]),
+                 AttendanceSession.school_id == get_current_school_id()).all()
         return [SessionDTO(id=s.id,
                            teacher_name=s.teacher.name if s.teacher else "?",
                            class_name=s.class_.name if s.class_ else "?",
                            end_time=s.end_time,
-                           absent=[(r.student.name, r.reason) for r in s.records if not r.is_present])
+                           absent=[(r.student.name, r.reason) for r in s.records if not r.is_present],
+                           school_name=s.school.name if s.school else None)
                 for s in sessions]
 
 
 def set_absence_reason(student_id: int, class_id: int, target_date: date, reason: str) -> None:
-    """
-    Устанавливает причину отсутствия ученика за день.
-
-    Так как на класс — максимум одна сессия в день, здесь достаточно найти
-    эту единственную сессию (если она есть) и обновить запись в ней.
-    Раньше тут был цикл по нескольким сессиям дня — это больше не нужно.
-    """
     with get_db() as db:
         sess = db.query(AttendanceSession).filter(
             AttendanceSession.class_id == class_id,
             AttendanceSession.session_date == target_date,
             AttendanceSession.status.in_(["completed", "auto_completed"]),
+            AttendanceSession.school_id == get_current_school_id(),
         ).first()
         if not sess:
             return
@@ -304,18 +324,13 @@ def set_absence_reason(student_id: int, class_id: int, target_date: date, reason
 
 
 def get_absent_students_today(class_id: int, today_date: date) -> dict[int, dict]:
-    """
-    Возвращает отсутствующих сегодня в классе.
-
-    Так как на класс — максимум одна сессия в день, здесь больше не нужно
-    объединять причины из нескольких сессий — берём записи единственной сессии.
-    """
     with get_db() as db:
         sess = db.query(AttendanceSession).options(
             joinedload(AttendanceSession.records).joinedload(AttendanceRecord.student),
         ).filter(AttendanceSession.class_id == class_id,
                  AttendanceSession.status.in_(["completed", "auto_completed"]),
-                 AttendanceSession.session_date == today_date).first()
+                 AttendanceSession.session_date == today_date,
+                 AttendanceSession.school_id == get_current_school_id()).first()
 
         if not sess:
             return {}
@@ -327,13 +342,11 @@ def get_absent_students_today(class_id: int, today_date: date) -> dict[int, dict
         return result
 
 
-# ===== Функции для работы с заявками =====
-
 def get_pending_requests() -> list[dict]:
-    """Возвращает список активных заявок на регистрацию с человекочитаемыми метками."""
     from core.roles import ROLE_LABELS
     with get_db() as db:
-        reqs = db.query(RegistrationRequest).filter(RegistrationRequest.status == "pending").all()
+        reqs = db.query(RegistrationRequest).filter(RegistrationRequest.status == "pending",
+                                                    RegistrationRequest.school_id == get_current_school_id()).all()
         return [{
             'id': r.id,
             'telegram_id': r.telegram_id,
@@ -345,17 +358,18 @@ def get_pending_requests() -> list[dict]:
 
 
 def approve_request(req_id: int) -> bool:
-    """Одобряет заявку и создаёт учителя. Возвращает True при успехе."""
     with get_db() as db:
         req = db.query(RegistrationRequest).filter(
             RegistrationRequest.id == req_id,
-            RegistrationRequest.status == "pending"
+            RegistrationRequest.status == "pending",
+            RegistrationRequest.school_id == get_current_school_id()
         ).first()
         if not req:
             return False
         class_id = None
         if req.class_name:
-            c = db.query(Class).filter(Class.name == req.class_name).first()
+            c = db.query(Class).filter(Class.name == req.class_name,
+                                       Class.school_id == get_current_school_id()).first()
             if c:
                 class_id = c.id
         teacher = Teacher(
@@ -363,6 +377,7 @@ def approve_request(req_id: int) -> bool:
             name=req.name,
             role=req.role,
             class_id=class_id,
+            school_id=get_current_school_id(),
         )
         db.add(teacher)
         req.status = "approved"
@@ -370,53 +385,41 @@ def approve_request(req_id: int) -> bool:
 
 
 def reject_request(req_id: int) -> None:
-    """Отклоняет заявку (ставит статус rejected)."""
     with get_db() as db:
         req = db.query(RegistrationRequest).filter(
             RegistrationRequest.id == req_id,
-            RegistrationRequest.status == "pending"
+            RegistrationRequest.status == "pending",
+            RegistrationRequest.school_id == get_current_school_id()
         ).first()
         if req:
             req.status = "rejected"
 
 
-# ===== Функции для директора и секретаря =====
-
 def is_class_done_today(class_id: int, today_date: date) -> bool:
-    """Проверяет, завершена ли перекличка в классе сегодня (есть сессия completed/auto_completed)."""
     with get_db() as db:
         exists = db.query(AttendanceSession).filter(
             AttendanceSession.class_id == class_id,
             AttendanceSession.session_date == today_date,
             AttendanceSession.status.in_(["completed", "auto_completed"]),
+            AttendanceSession.school_id == get_current_school_id(),
         ).first()
         return exists is not None
 
 
 def is_school_done_today(today_date: date) -> bool:
-    """
-    Перекличка по школе готова, если не осталось классов с ЕЩЁ ИДУЩЕЙ (active)
-    перекличкой. Класс, который сегодня вообще не отмечался (например, уехал
-    на экскурсию) — это нормальный сценарий и не блокирует готовность.
-
-    Один запрос вместо N+1.
-    """
     with get_db() as db:
-        classes_count = db.query(Class).count()
+        classes_count = db.query(Class).filter(Class.school_id == get_current_school_id()).count()
         if classes_count == 0:
             return False
         active_exists = db.query(AttendanceSession).filter(
             AttendanceSession.session_date == today_date,
             AttendanceSession.status == "active",
+            AttendanceSession.school_id == get_current_school_id(),
         ).first()
         return active_exists is None
 
 
 def get_absence_reason_counts(target_date: date) -> dict[str, int]:
-    """
-    Считает количество отсутствующих сегодня по каждой причине (по всей школе),
-    плюс общий итог. Если причина не указана (None), относит к DEFAULT_ABSENCE_REASON.
-    """
     from core.constants import DEFAULT_ABSENCE_REASON
     with get_db() as db:
         sessions = db.query(AttendanceSession).options(
@@ -424,6 +427,7 @@ def get_absence_reason_counts(target_date: date) -> dict[str, int]:
         ).filter(
             AttendanceSession.session_date == target_date,
             AttendanceSession.status.in_(["completed", "auto_completed"]),
+            AttendanceSession.school_id == get_current_school_id(),
         ).all()
 
         counts: dict[str, int] = {}
@@ -434,42 +438,34 @@ def get_absence_reason_counts(target_date: date) -> dict[str, int]:
                     total += 1
                     reason = rec.reason or DEFAULT_ABSENCE_REASON
                     counts[reason] = counts.get(reason, 0) + 1
-
         counts["__total__"] = total
         return counts
 
 
 def reset_today_sessions() -> int:
-    """
-    Удаляет все сессии переклички за сегодня (любого статуса).
-    Возвращает количество удалённых сессий.
-    Используется администратором для перезапуска переклички.
-    """
     today = date.today()
     with get_db() as db:
         sessions = db.query(AttendanceSession).filter(
-            AttendanceSession.session_date == today
+            AttendanceSession.session_date == today,
+            AttendanceSession.school_id == get_current_school_id(),
         ).all()
         count = len(sessions)
         for s in sessions:
             db.delete(s)
         return count
 
-# ===== Добавить в конец repositories.py =====
 
 def get_teacher_session_today(teacher_id: int, today_date: date) -> SessionDTO | None:
-    """
-    Возвращает SessionDTO сессии этого учителя за сегодня (если есть).
-    Используется для проверки: провёл ли учитель уже перекличку.
-    """
     with get_db() as db:
         s = db.query(AttendanceSession).options(
             joinedload(AttendanceSession.teacher),
             joinedload(AttendanceSession.class_),
+            joinedload(AttendanceSession.school),
             joinedload(AttendanceSession.records).joinedload(AttendanceRecord.student),
         ).filter(
             AttendanceSession.teacher_id == teacher_id,
             AttendanceSession.session_date == today_date,
+            AttendanceSession.school_id == get_current_school_id(),
         ).first()
         if not s:
             return None
@@ -479,4 +475,23 @@ def get_teacher_session_today(teacher_id: int, today_date: date) -> SessionDTO |
             class_name=s.class_.name if s.class_ else "?",
             end_time=s.end_time,
             absent=[(r.student.name, r.reason) for r in s.records if not r.is_present],
+            school_name=s.school.name if s.school else None
         )
+
+
+# ===== Школы (глобальные, без фильтра) =====
+
+def get_all_schools() -> list[dict]:
+    """Возвращает список всех школ (id, name)."""
+    with get_db() as db:
+        schools = db.query(School).all()
+        return [{"id": s.id, "name": s.name} for s in schools]
+
+
+def create_school(name: str) -> dict:
+    """Создаёт новую школу и возвращает её id и name."""
+    with get_db() as db:
+        school = School(name=name)
+        db.add(school)
+        db.flush()
+        return {"id": school.id, "name": school.name}

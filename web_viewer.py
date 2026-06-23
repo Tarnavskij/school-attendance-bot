@@ -1,11 +1,11 @@
-# web_viewer.py
+# web_viewer.py — полностью обновлённый
+
+import io
 from flask import Flask, render_template_string, request, send_file, redirect, url_for
 from sqlalchemy.orm import joinedload
 from sqlalchemy import func
 from database import SessionLocal, AttendanceSession, AttendanceRecord, RegistrationRequest, Teacher, Class
-from repositories import create_teacher
-from core.roles import Role
-import io
+from config import DEFAULT_SCHOOL_ID
 
 app = Flask(__name__)
 
@@ -93,7 +93,7 @@ TEMPLATE = """<!DOCTYPE html>
     flex-wrap: wrap;
   }
 
-  input[type="date"] {
+  input[type="date"], input[type="text"] {
     background: rgba(255,255,255,0.08);
     border: 1px solid rgba(255,255,255,0.15);
     border-radius: 12px;
@@ -104,7 +104,7 @@ TEMPLATE = """<!DOCTYPE html>
     transition: all 0.2s;
   }
 
-  input[type="date"]:focus {
+  input[type="date"]:focus, input[type="text"]:focus {
     border-color: rgba(167,139,250,0.6);
     background: rgba(255,255,255,0.12);
   }
@@ -268,6 +268,7 @@ TEMPLATE = """<!DOCTYPE html>
       <span style="background:#ff453a;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:4px;">{{ pending_count }}</span>
     {% endif %}
   </a>
+  <a href="/schools" class="{{ 'active' if page == 'schools' }}">🏫 Школы</a>
 </nav>
 
 <div class="container">
@@ -384,7 +385,30 @@ TEMPLATE = """<!DOCTYPE html>
     {% endif %}
   </div>
 
+{% elif page == 'schools' %}
+  <div class="page-title">🏫 Управление школами</div>
+
+  <div class="glass">
+    <form method="post" action="/schools" style="display:flex;gap:10px;align-items:center">
+      <input type="text" name="name" placeholder="Название школы" required>
+      <button type="submit" class="btn btn-primary">➕ Создать</button>
+    </form>
+  </div>
+
+  <div class="glass">
+    {% if schools %}
+    <table>
+      <tr><th>ID</th><th>Название</th></tr>
+      {% for s in schools %}
+      <tr><td>{{ s.id }}</td><td>{{ s.name }}</td></tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <div class="empty">Нет зарегистрированных школ</div>
+    {% endif %}
+  </div>
 {% endif %}
+
 </div>
 </body>
 </html>"""
@@ -392,7 +416,10 @@ TEMPLATE = """<!DOCTYPE html>
 
 def _pending_count():
     db = SessionLocal()
-    count = db.query(RegistrationRequest).filter(RegistrationRequest.status == "pending").count()
+    count = db.query(RegistrationRequest).filter(
+        RegistrationRequest.status == "pending",
+        RegistrationRequest.school_id == DEFAULT_SCHOOL_ID,
+    ).count()
     db.close()
     return count
 
@@ -406,6 +433,7 @@ def _load_sessions(date_str: str):
     ).filter(
         func.date(AttendanceSession.start_time) == date_str,
         AttendanceSession.status.in_(["completed", "auto_completed"]),
+        AttendanceSession.school_id == DEFAULT_SCHOOL_ID,
     ).all()
     db.close()
     return sessions
@@ -445,11 +473,14 @@ def index():
 def requests_page():
     from core.roles import ROLE_LABELS
     db = SessionLocal()
-    reqs = db.query(RegistrationRequest).order_by(RegistrationRequest.created_at.desc()).all()
+    reqs = db.query(RegistrationRequest).filter(
+        RegistrationRequest.school_id == DEFAULT_SCHOOL_ID
+    ).order_by(RegistrationRequest.created_at.desc()).all()
 
-    # Для каждой pending-заявки проверяем — не существует ли уже такой пользователь
     existing_ids = set(
-        t.telegram_id for t in db.query(Teacher.telegram_id).all()
+        t.telegram_id for t in db.query(Teacher.telegram_id).filter(
+            Teacher.school_id == DEFAULT_SCHOOL_ID
+        ).all()
     )
 
     result = [{
@@ -468,14 +499,19 @@ def requests_page():
 
 @app.route("/requests/<int:req_id>/approve", methods=["POST"])
 def approve_request(req_id: int):
-    from core.roles import ROLE_LABELS
     db = SessionLocal()
-    req = db.query(RegistrationRequest).filter(RegistrationRequest.id == req_id).first()
-    if req and req.status == "pending":
-        # Защита от дубликата — проверяем перед INSERT
-        already = db.query(Teacher).filter(Teacher.telegram_id == req.telegram_id).first()
+    req = db.query(RegistrationRequest).filter(
+        RegistrationRequest.id == req_id,
+        RegistrationRequest.school_id == DEFAULT_SCHOOL_ID,
+        RegistrationRequest.status == "pending"
+    ).first()
+
+    if req:
+        already = db.query(Teacher).filter(
+            Teacher.telegram_id == req.telegram_id,
+            Teacher.school_id == DEFAULT_SCHOOL_ID
+        ).first()
         if already:
-            # Пользователь уже есть — просто закрываем заявку
             req.status = "approved"
             db.commit()
             db.close()
@@ -483,11 +519,20 @@ def approve_request(req_id: int):
 
         class_id = None
         if req.class_name:
-            c = db.query(Class).filter(Class.name == req.class_name).first()
+            c = db.query(Class).filter(
+                Class.name == req.class_name,
+                Class.school_id == DEFAULT_SCHOOL_ID
+            ).first()
             if c:
                 class_id = c.id
-        teacher = Teacher(telegram_id=req.telegram_id, name=req.name,
-                          role=req.role, class_id=class_id)
+
+        teacher = Teacher(
+            telegram_id=req.telegram_id,
+            name=req.name,
+            role=req.role,
+            class_id=class_id,
+            school_id=DEFAULT_SCHOOL_ID
+        )
         db.add(teacher)
         req.status = "approved"
         db.commit()
@@ -498,12 +543,32 @@ def approve_request(req_id: int):
 @app.route("/requests/<int:req_id>/reject", methods=["POST"])
 def reject_request(req_id: int):
     db = SessionLocal()
-    req = db.query(RegistrationRequest).filter(RegistrationRequest.id == req_id).first()
-    if req and req.status == "pending":
+    req = db.query(RegistrationRequest).filter(
+        RegistrationRequest.id == req_id,
+        RegistrationRequest.school_id == DEFAULT_SCHOOL_ID,
+        RegistrationRequest.status == "pending"
+    ).first()
+    if req:
         req.status = "rejected"
         db.commit()
     db.close()
     return redirect(url_for("requests_page"))
+
+
+@app.route("/schools")
+def schools_page():
+    from repositories import get_all_schools
+    schools = get_all_schools()
+    return render_template_string(TEMPLATE, page="schools", schools=schools,
+                                  pending_count=_pending_count())
+
+@app.route("/schools", methods=["POST"])
+def create_school():
+    name = request.form.get("name", "").strip()
+    if name:
+        from repositories import create_school
+        create_school(name)
+    return redirect(url_for("schools_page"))
 
 
 @app.route("/download_excel")

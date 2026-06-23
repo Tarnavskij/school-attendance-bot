@@ -13,28 +13,53 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 Base = declarative_base()
 
 
+class School(Base):
+    __tablename__ = "schools"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), unique=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.now, nullable=False)
+
+    teachers = relationship("Teacher", back_populates="school")
+    classes = relationship("Class", back_populates="school")
+    students = relationship("Student", back_populates="school")
+    attendance_sessions = relationship("AttendanceSession", back_populates="school")
+    registration_requests = relationship("RegistrationRequest", back_populates="school")
+
+
 class Teacher(Base):
     __tablename__ = "teachers"
 
     id = Column(Integer, primary_key=True)
-    telegram_id = Column(Integer, unique=True, nullable=False, index=True)
+    telegram_id = Column(Integer, nullable=False, index=True)
     name = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False, default="subject_teacher")
     class_id = Column(Integer, ForeignKey("classes.id"), nullable=True)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=False, default=1)
 
     class_ = relationship("Class", back_populates="teacher")
+    school = relationship("School", back_populates="teachers")
     sessions = relationship("AttendanceSession", back_populates="teacher")
 
 
 class Class(Base):
     __tablename__ = "classes"
+    __table_args__ = (
+        UniqueConstraint("name", "school_id", name="uq_class_name_per_school"),
+    )
 
     id = Column(Integer, primary_key=True)
-    name = Column(String(50), unique=True, nullable=False)
+    name = Column(String(50), nullable=False)
+    # Новые поля – необязательные, но заполним при инициализации
+    grade = Column(Integer, nullable=True)          # например, 5, 6, …, 11
+    letter = Column(String(5), nullable=True)       # "А", "Б", "В", "" для общегородских
+
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=False, default=1)
 
     students = relationship("Student", back_populates="class_")
     sessions = relationship("AttendanceSession", back_populates="class_")
     teacher = relationship("Teacher", back_populates="class_", uselist=False)
+    school = relationship("School", back_populates="classes")
 
 
 class Student(Base):
@@ -43,34 +68,32 @@ class Student(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False)
     class_id = Column(Integer, ForeignKey("classes.id"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=False, default=1)
 
     class_ = relationship("Class", back_populates="students")
+    school = relationship("School", back_populates="students")
     records = relationship("AttendanceRecord", back_populates="student")
 
 
 class AttendanceSession(Base):
     __tablename__ = "attendance_sessions"
     __table_args__ = (
-        # Защита от гонки на уровне БД: один класс может иметь не более одной
-        # сессии переклички в день, независимо от статуса (active/completed/auto_completed).
-        # Если два учителя почти одновременно создадут сессию для одного класса,
-        # второй INSERT упадёт с IntegrityError — это ожидаемо и обрабатывается в repositories.create_session.
-        UniqueConstraint("class_id", "session_date", name="uq_class_session_per_day"),
+        UniqueConstraint("class_id", "session_date", "school_id", name="uq_class_session_per_day_per_school"),
         Index("ix_session_date_status", "session_date", "status"),
     )
 
     id = Column(Integer, primary_key=True)
     teacher_id = Column(Integer, ForeignKey("teachers.id"), nullable=False)
     class_id = Column(Integer, ForeignKey("classes.id"), nullable=False)
-    # Чистая календарная дата сессии (без времени) — используется для всех фильтров
-    # "перекличка за такой-то день" вместо func.date(start_time), что не дружит с индексами.
     session_date = Column(Date, default=date.today, nullable=False)
     start_time = Column(DateTime, default=datetime.now, nullable=False)
     end_time = Column(DateTime, nullable=True)
     status = Column(String(20), default="active", nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=False, default=1)
 
     teacher = relationship("Teacher", back_populates="sessions")
     class_ = relationship("Class", back_populates="sessions")
+    school = relationship("School", back_populates="attendance_sessions")
     records = relationship("AttendanceRecord", back_populates="session", cascade="all, delete-orphan")
 
 
@@ -86,6 +109,7 @@ class AttendanceRecord(Base):
     session = relationship("AttendanceSession", back_populates="records")
     student = relationship("Student", back_populates="records")
 
+
 class RegistrationRequest(Base):
     __tablename__ = "registration_requests"
 
@@ -96,3 +120,6 @@ class RegistrationRequest(Base):
     class_name = Column(String(50), nullable=True)
     status = Column(String(20), default="pending", nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.now, nullable=False)
+    school_id = Column(Integer, ForeignKey("schools.id"), nullable=False, default=1)
+
+    school = relationship("School", back_populates="registration_requests")

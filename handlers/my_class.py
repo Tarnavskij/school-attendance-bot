@@ -23,10 +23,11 @@ async def my_class_handler(message: Message) -> None:
         if not classes:
             await message.answer("Нет доступных классов.")
             return
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            *[[InlineKeyboardButton(text=c.name, callback_data=f"mc:view:{c.id}")] for c in classes],
-            [back_to_menu_btn()],
-        ])
+        # Строим сетку по 2 кнопки в ряд
+        buttons = [InlineKeyboardButton(text=c.name, callback_data=f"mc:view:{c.id}") for c in classes]
+        rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+        rows.append([back_to_menu_btn()])
+        kb = InlineKeyboardMarkup(inline_keyboard=rows)
         await message.answer("Выберите класс для просмотра:", reply_markup=kb)
         return
 

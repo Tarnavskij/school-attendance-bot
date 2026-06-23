@@ -14,6 +14,7 @@ BTN_STUDENTS = "🎓 Ученики"
 BTN_REQUEST_ACCESS = "🚪 Получить доступ"
 BTN_DIRECTOR_CLASSES = "🏫 Классы"
 BTN_ROLL_STATUS = "📋 Статус переклички"
+BTN_SCHOOLS = "🏫 Школы"                          # ← новая кнопка
 
 # ── Reply keyboards ───────────────────────────────────────────────────────────
 
@@ -33,7 +34,7 @@ def build_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         rows = [
             [KeyboardButton(text=BTN_START_ROLL), KeyboardButton(text=BTN_MY_CLASS)],
             [KeyboardButton(text=BTN_SCHOOL_SUMMARY), KeyboardButton(text=BTN_TEACHER_LIST)],
-            [KeyboardButton(text=BTN_STUDENTS)],
+            [KeyboardButton(text=BTN_STUDENTS), KeyboardButton(text=BTN_SCHOOLS)],  # ← добавлено
         ]
         return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
