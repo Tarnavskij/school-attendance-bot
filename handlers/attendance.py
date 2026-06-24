@@ -9,10 +9,10 @@ from services import AttendanceService
 from repositories import (
     get_available_classes, get_students_by_class,
     get_session_records, get_session_result, delete_session,
-    get_teacher_by_telegram_id,
+    get_teacher_by_telegram_id, get_class_teacher_for_class,
 )
 from core.keyboards import BTN_START_ROLL, build_menu_keyboard
-from core.roles import check_access, Role
+from core.roles import check_access, Role, is_admin
 from helpers.session_card import get_today_session_card
 
 attendance_router = Router()
@@ -29,12 +29,14 @@ async def start_attendance(message: Message, state: FSMContext) -> None:
         await message.answer("У вас нет прав для проведения переклички.")
         return
 
-    card = get_today_session_card(message.from_user.id)
-    if card:
-        await message.answer(card)
-        return
+    # Администратору не показываем карточку – он может проводить перекличку в любое время
+    if not is_admin(message.from_user.id):
+        card = get_today_session_card(message.from_user.id)
+        if card:
+            await message.answer(card)
+            return
 
-    available = get_available_classes(date.today())
+    available = get_available_classes(date.today(), is_admin_user=is_admin(message.from_user.id))
     if not available:
         await message.answer("Все классы уже отмечены на сегодня.")
         return
@@ -46,17 +48,14 @@ async def start_attendance(message: Message, state: FSMContext) -> None:
 
 
 def _build_class_keyboard(available_classes) -> InlineKeyboardMarkup:
-    """Строит сетку из кнопок классов (по 2 в ряд) + кнопка Отмена."""
     buttons = []
     for c in available_classes:
         buttons.append(InlineKeyboardButton(text=c.name, callback_data=f"att:class:{c.id}"))
-    # Разбиваем на ряды по 2 кнопки
     rows = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
     rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="att:cancel_flow")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-# ── Блокировка случайного текста при выборе класса ──
 @attendance_router.message(AttendanceStates.choosing_class)
 async def text_during_class_choice(message: Message) -> None:
     await message.delete()
@@ -76,7 +75,10 @@ async def cancel_flow(callback: CallbackQuery, state: FSMContext) -> None:
 @attendance_router.callback_query(AttendanceStates.choosing_class, F.data.startswith("att:class:"))
 async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
     class_id = int(callback.data.split(":")[-1])
-    session, result = AttendanceService.start_attendance(callback.from_user.id, class_id)
+    session, result = AttendanceService.start_attendance(
+        callback.from_user.id, class_id,
+        is_admin_user=is_admin(callback.from_user.id)
+    )
 
     if session is None:
         await callback.message.edit_text(result)
@@ -100,7 +102,6 @@ async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
-# ── Блокировка случайного текста при отметке ──
 @attendance_router.message(AttendanceStates.marking)
 async def text_during_marking(message: Message) -> None:
     await message.delete()
@@ -149,6 +150,22 @@ async def submit_attendance(callback: CallbackQuery, state: FSMContext) -> None:
         else:
             lines.append("\n✅ Все присутствовали")
         card_text = "\n".join(lines)
+
+        # --- Уведомление классного руководителя ---
+        class_teacher = get_class_teacher_for_class(result.class_id)
+        if class_teacher and class_teacher.telegram_id != callback.from_user.id:
+            notify_lines = [f"📋 Перекличка в вашем классе {result.class_name} завершена."]
+            if result.absent:
+                notify_lines.append(f"\nОтсутствуют ({len(result.absent)}):")
+                for name, reason in result.absent:
+                    reason_str = f" — {reason}" if reason else ""
+                    notify_lines.append(f"  • {name}{reason_str}")
+            else:
+                notify_lines.append("\n✅ Все присутствовали")
+            try:
+                await callback.bot.send_message(class_teacher.telegram_id, "\n".join(notify_lines))
+            except Exception:
+                pass
     else:
         card_text = "✅ Перекличка завершена."
 

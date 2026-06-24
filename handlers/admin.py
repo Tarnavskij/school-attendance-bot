@@ -1,6 +1,7 @@
 # handlers/admin.py
 import io
 from datetime import date
+from math import ceil
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
@@ -18,6 +19,7 @@ from repositories import (
     get_sessions_for_report, get_teacher_card,
     get_pending_requests, approve_request, reject_request,
     reset_today_sessions, get_all_schools,
+    get_teachers_paginated, get_students_by_class_paginated,
 )
 from database import Teacher, SessionLocal
 from services import ReportService
@@ -30,6 +32,9 @@ from core.school_context import set_current_school_id, get_current_school_id, ge
 from config import ADMIN_TELEGRAM_ID
 
 admin_router = Router()
+
+TEACHERS_PER_PAGE = 5
+STUDENTS_PER_PAGE = 8
 
 
 class AddStudentStates(StatesGroup):
@@ -125,40 +130,69 @@ def _build_excel(sessions, date_str: str) -> bytes:
     return buf.getvalue()
 
 
-# ===== Список пользователей (учителей) =====
+# ===== Список пользователей (учителей) с пагинацией =====
 @admin_router.message(F.text == BTN_TEACHER_LIST)
 async def teacher_list(message: Message) -> None:
     if not is_admin(message.from_user.id):
         return
-    await _show_teacher_list(message)
+    await _show_teacher_page(message, page=1)
 
 
-async def _show_teacher_list(target, edit: bool = False) -> None:
-    teachers = get_all_teachers()
-    text = "👨‍🏫 Управление пользователями:"
-    kb = _teacher_list_keyboard(teachers)
+@admin_router.callback_query(F.data.startswith("admin:teachers_page:"))
+async def teachers_page_callback(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        return
+    page = int(callback.data.split(":")[-1])
+    await _show_teacher_page(callback.message, page=page, edit=True)
+    await callback.answer()
+
+
+async def _show_teacher_page(target, page: int = 1, edit: bool = False) -> None:
+    teachers, total = get_teachers_paginated(page=page, per_page=TEACHERS_PER_PAGE)
+    total_pages = max(1, ceil(total / TEACHERS_PER_PAGE))
+
+    text = f"👨‍🏫 Управление пользователями (страница {page}/{total_pages}):"
+    kb = _teacher_list_keyboard(teachers, page, total_pages)
+
     if edit:
         await target.edit_text(text, reply_markup=kb)
     else:
         await target.answer(text, reply_markup=kb)
 
 
-def _teacher_list_keyboard(teachers) -> InlineKeyboardMarkup:
+def _teacher_list_keyboard(teachers, current_page: int, total_pages: int) -> InlineKeyboardMarkup:
     rows = []
     for t in teachers:
         school_part = f" · 🏫 {t.school_name}" if t.school_name else ""
         label = f"{t.name} · {ROLE_LABELS.get(t.role, t.role)} · {t.class_name or 'нет'}{school_part}"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"admin:teacher:{t.id}")])
+
+    # Навигация
+    nav_buttons = []
+    if current_page > 1:
+        nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"admin:teachers_page:{current_page - 1}"))
+    nav_buttons.append(InlineKeyboardButton(text=f"{current_page}/{total_pages}", callback_data="admin:noop"))
+    if current_page < total_pages:
+        nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"admin:teachers_page:{current_page + 1}"))
+
+    if len(nav_buttons) > 1:  # показываем навигацию только если есть куда листать
+        rows.append(nav_buttons)
+
     rows.append([InlineKeyboardButton(text="📩 Заявки", callback_data="admin:requests")])
     rows.append([InlineKeyboardButton(text="🔙 Назад в меню", callback_data="nav:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@admin_router.callback_query(F.data == "admin:noop")
+async def noop(callback: CallbackQuery) -> None:
+    await callback.answer()
 
 
 @admin_router.callback_query(F.data == "admin:back_teachers")
 async def back_to_teacher_list(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         return
-    await _show_teacher_list(callback.message, edit=True)
+    await _show_teacher_page(callback.message, page=1, edit=True)
     await callback.answer()
 
 
@@ -298,7 +332,7 @@ async def delete_teacher_execute(callback: CallbackQuery) -> None:
     teacher_id = int(callback.data.split(":")[-1])
     delete_teacher(teacher_id)
     await callback.answer("Пользователь удалён.")
-    await _show_teacher_list(callback.message, edit=True)
+    await _show_teacher_page(callback.message, page=1, edit=True)
 
 
 @admin_router.callback_query(F.data.startswith("admin:chrole:"))
@@ -352,7 +386,7 @@ async def assign_class(callback: CallbackQuery) -> None:
     await _show_teacher_card(callback.message, teacher_id)
 
 
-# ===== Ученики =====
+# ===== Ученики с пагинацией =====
 @admin_router.message(F.text == BTN_STUDENTS)
 async def students_menu(message: Message) -> None:
     if not is_admin(message.from_user.id):
@@ -382,22 +416,52 @@ async def show_students(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         return
     class_id = int(callback.data.split(":")[-1])
-    await _show_student_list(callback.message, class_id)
+    await _show_student_page(callback.message, class_id, page=1)
     await callback.answer()
 
 
-async def _show_student_list(message, class_id: int) -> None:
-    students = get_students_by_class(class_id)
+@admin_router.callback_query(F.data.startswith("admin:students_page:"))
+async def students_page_callback(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        return
+    _, _, class_id, page_str = callback.data.split(":")
+    class_id = int(class_id)
+    page = int(page_str)
+    await _show_student_page(callback.message, class_id, page=page, edit=True)
+    await callback.answer()
+
+
+async def _show_student_page(message, class_id: int, page: int = 1, edit: bool = False) -> None:
+    students, total = get_students_by_class_paginated(class_id, page=page, per_page=STUDENTS_PER_PAGE)
+    total_pages = max(1, ceil(total / STUDENTS_PER_PAGE))
+
     classes = get_all_classes()
     class_obj = next((c for c in classes if c.id == class_id), None)
     class_name = class_obj.name if class_obj else "?"
+    text = f"🎓 Ученики класса {class_name} (всего {total}, стр. {page}/{total_pages}):"
+
     rows = [[InlineKeyboardButton(text=f"🗑 {s.name}", callback_data=f"admin:delstudent:{s.id}:{class_id}")]
             for s in students]
     rows.append([InlineKeyboardButton(text="➕ Добавить ученика", callback_data=f"admin:addstudent:{class_id}")])
+
+    # Навигация
+    nav_buttons = []
+    if page > 1:
+        nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"admin:students_page:{class_id}:{page - 1}"))
+    nav_buttons.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="admin:noop"))
+    if page < total_pages:
+        nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"admin:students_page:{class_id}:{page + 1}"))
+
+    if len(nav_buttons) > 1:
+        rows.append(nav_buttons)
+
     rows.append([InlineKeyboardButton(text="↩️ К классам", callback_data="admin:back_classes")])
     rows.append([InlineKeyboardButton(text="🔙 Назад в меню", callback_data="nav:menu")])
-    await message.edit_text(f"🎓 Ученики класса {class_name} ({len(students)} чел.):",
-                            reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+    if edit:
+        await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    else:
+        await message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
 
 
 @admin_router.callback_query(F.data == "admin:back_classes")
@@ -430,16 +494,8 @@ async def process_student_name(message: Message, state: FSMContext) -> None:
     create_student(name=name, class_id=class_id)
     await state.clear()
     await message.answer(f"✅ Ученик «{name}» добавлен.")
-    students = get_students_by_class(class_id)
-    classes = get_all_classes()
-    class_obj = next((c for c in classes if c.id == class_id), None)
-    class_name = class_obj.name if class_obj else "?"
-    rows = [[InlineKeyboardButton(text=f"🗑 {s.name}", callback_data=f"admin:delstudent:{s.id}:{class_id}")]
-            for s in students]
-    rows.append([InlineKeyboardButton(text="➕ Добавить ученика", callback_data=f"admin:addstudent:{class_id}")])
-    rows.append([InlineKeyboardButton(text="↩️ К классам", callback_data="admin:back_classes")])
-    await message.answer(f"🎓 Ученики класса {class_name}:",
-                         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+    # После добавления возвращаемся к списку учеников (страница 1)
+    await _show_student_page(message, class_id, page=1)
 
 
 @admin_router.callback_query(F.data.startswith("admin:delstudent:"))
@@ -466,7 +522,7 @@ async def delete_student_execute(callback: CallbackQuery) -> None:
     class_id = int(parts[3])
     delete_student(student_id)
     await callback.answer("Ученик удалён.")
-    await _show_student_list(callback.message, class_id)
+    await _show_student_page(callback.message, class_id, page=1, edit=True)
 
 
 # ===== Школы (администратор) =====
@@ -479,7 +535,6 @@ async def list_schools(message: Message) -> None:
         await message.answer("Нет зарегистрированных школ.")
         return
 
-    # Показываем текущую школу
     current_id = get_current_school_id()
     current_name = get_current_school_name() or "неизвестно"
     text = f"🏫 Текущая школа: {current_name} (ID: {current_id})\n\nВыберите школу из списка:"
@@ -505,17 +560,30 @@ async def switch_school(callback: CallbackQuery) -> None:
     set_current_school_id(school_id)
     school_name = get_current_school_name() or f"Школа {school_id}"
 
-    # Удаляем сообщение со списком школ
+    # 🔧 Гарантируем, что администратор присутствует в этой школе
+    db = SessionLocal()
+    existing = db.query(Teacher).filter(
+        Teacher.telegram_id == callback.from_user.id,
+        Teacher.school_id == school_id
+    ).first()
+    if not existing:
+        admin_teacher = Teacher(
+            telegram_id=callback.from_user.id,
+            name="Администратор",
+            role="admin",
+            school_id=school_id
+        )
+        db.add(admin_teacher)
+        db.commit()
+    db.close()
+
     await callback.message.delete()
-    # Сообщаем о переключении
     await callback.message.answer(f"✅ Активная школа: {school_name} (ID: {school_id})")
-    # Отправляем обновлённое меню
     await callback.message.answer(
         "Выберите действие:",
         reply_markup=build_menu_keyboard(callback.from_user.id)
     )
     await callback.answer()
-
 
 @admin_router.message(Command("restore_admin"))
 async def restore_admin(message: Message) -> None:

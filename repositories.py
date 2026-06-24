@@ -29,7 +29,7 @@ class TeacherDTO:
     role: str
     class_id: int | None
     class_name: str | None
-    school_name: str | None          # <-- новое поле
+    school_name: str | None
 
 
 @dataclass
@@ -57,9 +57,10 @@ class SessionDTO:
     id: int
     teacher_name: str
     class_name: str
+    class_id: int                    # <-- добавлено
     end_time: datetime | None
     absent: list[tuple[str, str | None]]
-    school_name: str | None          # <-- новое поле
+    school_name: str | None
 
 
 @dataclass
@@ -167,11 +168,16 @@ def get_all_classes() -> list[ClassDTO]:
                 for c in db.query(Class).filter(Class.school_id == get_current_school_id()).all()]
 
 
-def get_available_classes(today_date: date) -> list[ClassDTO]:
+def get_available_classes(today_date: date, is_admin_user: bool = False) -> list[ClassDTO]:
+    """Классы, доступные для выбора. Администратору – все, учителям – только незанятые."""
+    if is_admin_user:
+        with get_db() as db:
+            return [ClassDTO(id=c.id, name=c.name)
+                    for c in db.query(Class).filter(Class.school_id == get_current_school_id()).all()]
     with get_db() as db:
         taken_ids = (db.query(AttendanceSession.class_id)
-                    .filter(AttendanceSession.session_date == today_date,
-                            AttendanceSession.school_id == get_current_school_id()))
+                     .filter(AttendanceSession.session_date == today_date,
+                             AttendanceSession.school_id == get_current_school_id()))
         return [ClassDTO(id=c.id, name=c.name)
                 for c in db.query(Class).filter(Class.school_id == get_current_school_id(),
                                                 ~Class.id.in_(taken_ids)).all()]
@@ -263,7 +269,7 @@ def get_session_result(session_id: int) -> SessionDTO | None:
         s = db.query(AttendanceSession).options(
             joinedload(AttendanceSession.teacher),
             joinedload(AttendanceSession.class_),
-            joinedload(AttendanceSession.school),               # <-- загружаем школу
+            joinedload(AttendanceSession.school),
             joinedload(AttendanceSession.records).joinedload(AttendanceRecord.student),
         ).filter(AttendanceSession.id == session_id).first()
         if not s:
@@ -272,6 +278,7 @@ def get_session_result(session_id: int) -> SessionDTO | None:
             id=s.id,
             teacher_name=s.teacher.name if s.teacher else "?",
             class_name=s.class_.name if s.class_ else "?",
+            class_id=s.class_id,          # <-- добавлено
             end_time=s.end_time,
             absent=[(r.student.name, r.reason) for r in s.records if not r.is_present],
             school_name=s.school.name if s.school else None
@@ -300,6 +307,7 @@ def get_sessions_for_report(target_date: date) -> list[SessionDTO]:
         return [SessionDTO(id=s.id,
                            teacher_name=s.teacher.name if s.teacher else "?",
                            class_name=s.class_.name if s.class_ else "?",
+                           class_id=s.class_id,       # <-- добавлено
                            end_time=s.end_time,
                            absent=[(r.student.name, r.reason) for r in s.records if not r.is_present],
                            school_name=s.school.name if s.school else None)
@@ -473,6 +481,7 @@ def get_teacher_session_today(teacher_id: int, today_date: date) -> SessionDTO |
             id=s.id,
             teacher_name=s.teacher.name if s.teacher else "?",
             class_name=s.class_.name if s.class_ else "?",
+            class_id=s.class_id,          # <-- добавлено
             end_time=s.end_time,
             absent=[(r.student.name, r.reason) for r in s.records if not r.is_present],
             school_name=s.school.name if s.school else None
@@ -495,3 +504,54 @@ def create_school(name: str) -> dict:
         db.add(school)
         db.flush()
         return {"id": school.id, "name": school.name}
+
+
+def get_teachers_paginated(page: int = 1, per_page: int = 5):
+    """Возвращает учителей текущей школы с пагинацией и общее количество."""
+    with get_db() as db:
+        query = db.query(Teacher).options(joinedload(Teacher.school)).filter(
+            Teacher.school_id == get_current_school_id()
+        )
+        total = query.count()
+        teachers = query.order_by(Teacher.name).offset((page - 1) * per_page).limit(per_page).all()
+        result = [
+            TeacherDTO(
+                id=t.id, telegram_id=t.telegram_id, name=t.name,
+                role=t.role, class_id=t.class_id,
+                class_name=t.class_.name if t.class_ else None,
+                school_name=t.school.name if t.school else None
+            )
+            for t in teachers
+        ]
+        return result, total
+
+
+def get_students_by_class_paginated(class_id: int, page: int = 1, per_page: int = 8):
+    """Возвращает учеников класса с пагинацией и общее количество."""
+    with get_db() as db:
+        query = db.query(Student).filter(
+            Student.class_id == class_id,
+            Student.school_id == get_current_school_id()
+        )
+        total = query.count()
+        students = query.order_by(Student.name).offset((page - 1) * per_page).limit(per_page).all()
+        result = [StudentDTO(id=s.id, name=s.name, class_id=s.class_id) for s in students]
+        return result, total
+
+
+def get_class_teacher_for_class(class_id: int) -> TeacherDTO | None:
+    """Находит классного руководителя для указанного класса в текущей школе."""
+    with get_db() as db:
+        t = db.query(Teacher).filter(
+            Teacher.class_id == class_id,
+            Teacher.role == "class_teacher",
+            Teacher.school_id == get_current_school_id()
+        ).first()
+        if not t:
+            return None
+        return TeacherDTO(
+            id=t.id, telegram_id=t.telegram_id, name=t.name,
+            role=t.role, class_id=t.class_id,
+            class_name=t.class_.name if t.class_ else None,
+            school_name=t.school.name if t.school else None
+        )

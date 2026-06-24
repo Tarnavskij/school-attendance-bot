@@ -1,13 +1,14 @@
-# web_viewer.py — полностью обновлённый
-
+# web_viewer.py — с импортом учеников для каждой школы
 import io
-from flask import Flask, render_template_string, request, send_file, redirect, url_for
+from flask import Flask, render_template_string, request, send_file, redirect, url_for, session
 from sqlalchemy.orm import joinedload
 from sqlalchemy import func
 from database import SessionLocal, AttendanceSession, AttendanceRecord, RegistrationRequest, Teacher, Class
 from config import DEFAULT_SCHOOL_ID
+from import_students import import_from_excel   # <-- новая зависимость
 
 app = Flask(__name__)
+app.secret_key = "super-secret-key-change-me-in-production"
 
 TEMPLATE = """<!DOCTYPE html>
 <html lang="ru">
@@ -37,6 +38,7 @@ TEMPLATE = """<!DOCTYPE html>
     position: sticky;
     top: 0;
     z-index: 100;
+    flex-wrap: wrap;
   }
 
   .nav-brand {
@@ -61,6 +63,17 @@ TEMPLATE = """<!DOCTYPE html>
   .nav a:hover, .nav a.active {
     color: #fff;
     background: rgba(255,255,255,0.1);
+  }
+
+  .nav select {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 12px;
+    padding: 8px 14px;
+    color: #e8eaf6;
+    font-size: 14px;
+    outline: none;
+    cursor: pointer;
   }
 
   .container {
@@ -93,7 +106,7 @@ TEMPLATE = """<!DOCTYPE html>
     flex-wrap: wrap;
   }
 
-  input[type="date"], input[type="text"] {
+  input[type="date"], input[type="text"], input[type="file"] {
     background: rgba(255,255,255,0.08);
     border: 1px solid rgba(255,255,255,0.15);
     border-radius: 12px;
@@ -104,7 +117,7 @@ TEMPLATE = """<!DOCTYPE html>
     transition: all 0.2s;
   }
 
-  input[type="date"]:focus, input[type="text"]:focus {
+  input[type="date"]:focus, input[type="text"]:focus, input[type="file"]:focus {
     border-color: rgba(167,139,250,0.6);
     background: rgba(255,255,255,0.12);
   }
@@ -269,6 +282,16 @@ TEMPLATE = """<!DOCTYPE html>
     {% endif %}
   </a>
   <a href="/schools" class="{{ 'active' if page == 'schools' }}">🏫 Школы</a>
+  <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+    <span style="color:rgba(255,255,255,0.4);font-size:14px;">🏫</span>
+    <form method="get" action="/switch_school" style="margin:0;">
+      <select name="school_id" onchange="this.form.submit()">
+        {% for s in all_schools %}
+          <option value="{{ s.id }}" {% if s.id == current_school_id %}selected{% endif %}>{{ s.name }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  </div>
 </nav>
 
 <div class="container">
@@ -398,15 +421,41 @@ TEMPLATE = """<!DOCTYPE html>
   <div class="glass">
     {% if schools %}
     <table>
-      <tr><th>ID</th><th>Название</th></tr>
+      <tr><th>ID</th><th>Название</th><th>Действия</th></tr>
       {% for s in schools %}
-      <tr><td>{{ s.id }}</td><td>{{ s.name }}</td></tr>
+      <tr>
+        <td>{{ s.id }}</td>
+        <td>{{ s.name }}</td>
+        <td>
+          <a href="/schools/{{ s.id }}/import" class="btn btn-sm btn-success">📥 Импорт учеников</a>
+        </td>
+      </tr>
       {% endfor %}
     </table>
     {% else %}
     <div class="empty">Нет зарегистрированных школ</div>
     {% endif %}
   </div>
+
+{% elif page == 'import' %}
+  <div class="page-title">📥 Импорт учеников в «{{ school_name }}»</div>
+
+  <div class="glass">
+    <form method="post" enctype="multipart/form-data" action="/schools/{{ school_id }}/import">
+      <input type="file" name="file" accept=".xlsx" required>
+      <button type="submit" class="btn btn-primary">⬆️ Загрузить и импортировать</button>
+      <a href="/schools" class="btn btn-sm btn-danger">Отмена</a>
+    </form>
+  </div>
+
+  {% if result %}
+  <div class="glass">
+    <p>✅ Импорт завершён.</p>
+    <p>Добавлено учеников: {{ result.added }}</p>
+    <p>Пропущено дубликатов: {{ result.skipped }}</p>
+    <p>Создано новых классов: {{ result.classes_created }}</p>
+  </div>
+  {% endif %}
 {% endif %}
 
 </div>
@@ -414,17 +463,26 @@ TEMPLATE = """<!DOCTYPE html>
 </html>"""
 
 
-def _pending_count():
+def get_web_school_id():
+    return session.get("school_id", DEFAULT_SCHOOL_ID)
+
+
+def get_all_schools_data():
+    from repositories import get_all_schools
+    return get_all_schools()
+
+
+def _pending_count(school_id):
     db = SessionLocal()
     count = db.query(RegistrationRequest).filter(
         RegistrationRequest.status == "pending",
-        RegistrationRequest.school_id == DEFAULT_SCHOOL_ID,
+        RegistrationRequest.school_id == school_id,
     ).count()
     db.close()
     return count
 
 
-def _load_sessions(date_str: str):
+def _load_sessions(date_str, school_id):
     db = SessionLocal()
     sessions = db.query(AttendanceSession).options(
         joinedload(AttendanceSession.teacher),
@@ -433,17 +491,25 @@ def _load_sessions(date_str: str):
     ).filter(
         func.date(AttendanceSession.start_time) == date_str,
         AttendanceSession.status.in_(["completed", "auto_completed"]),
-        AttendanceSession.school_id == DEFAULT_SCHOOL_ID,
+        AttendanceSession.school_id == school_id,
     ).all()
     db.close()
     return sessions
 
 
+@app.route("/switch_school")
+def switch_school():
+    school_id = request.args.get("school_id", DEFAULT_SCHOOL_ID, type=int)
+    session["school_id"] = school_id
+    return redirect(request.referrer or url_for("index"))
+
+
 @app.route("/")
 def index():
     from datetime import date
+    school_id = get_web_school_id()
     date_str = request.args.get("date", date.today().strftime("%Y-%m-%d"))
-    sessions = _load_sessions(date_str)
+    sessions = _load_sessions(date_str, school_id)
     rows = []
     for sess in sessions:
         absent = [(rec.student.name, rec.reason or "—") for rec in sess.records if not rec.is_present]
@@ -464,22 +530,27 @@ def index():
         "classes": len({s.class_id for s in sessions}),
     } if sessions else None
 
-    return render_template_string(TEMPLATE, page="summary", data=rows,
-                                  date=date_str, stats=stats,
-                                  pending_count=_pending_count())
+    return render_template_string(
+        TEMPLATE, page="summary", data=rows,
+        date=date_str, stats=stats,
+        pending_count=_pending_count(school_id),
+        all_schools=get_all_schools_data(),
+        current_school_id=school_id,
+    )
 
 
 @app.route("/requests")
 def requests_page():
     from core.roles import ROLE_LABELS
+    school_id = get_web_school_id()
     db = SessionLocal()
     reqs = db.query(RegistrationRequest).filter(
-        RegistrationRequest.school_id == DEFAULT_SCHOOL_ID
+        RegistrationRequest.school_id == school_id
     ).order_by(RegistrationRequest.created_at.desc()).all()
 
     existing_ids = set(
         t.telegram_id for t in db.query(Teacher.telegram_id).filter(
-            Teacher.school_id == DEFAULT_SCHOOL_ID
+            Teacher.school_id == school_id
         ).all()
     )
 
@@ -493,23 +564,28 @@ def requests_page():
         "already_exists": r.telegram_id in existing_ids,
     } for r in reqs]
     db.close()
-    return render_template_string(TEMPLATE, page="requests", requests=result,
-                                  pending_count=_pending_count())
+    return render_template_string(
+        TEMPLATE, page="requests", requests=result,
+        pending_count=_pending_count(school_id),
+        all_schools=get_all_schools_data(),
+        current_school_id=school_id,
+    )
 
 
 @app.route("/requests/<int:req_id>/approve", methods=["POST"])
 def approve_request(req_id: int):
+    school_id = get_web_school_id()
     db = SessionLocal()
     req = db.query(RegistrationRequest).filter(
         RegistrationRequest.id == req_id,
-        RegistrationRequest.school_id == DEFAULT_SCHOOL_ID,
+        RegistrationRequest.school_id == school_id,
         RegistrationRequest.status == "pending"
     ).first()
 
     if req:
         already = db.query(Teacher).filter(
             Teacher.telegram_id == req.telegram_id,
-            Teacher.school_id == DEFAULT_SCHOOL_ID
+            Teacher.school_id == school_id
         ).first()
         if already:
             req.status = "approved"
@@ -521,7 +597,7 @@ def approve_request(req_id: int):
         if req.class_name:
             c = db.query(Class).filter(
                 Class.name == req.class_name,
-                Class.school_id == DEFAULT_SCHOOL_ID
+                Class.school_id == school_id
             ).first()
             if c:
                 class_id = c.id
@@ -531,7 +607,7 @@ def approve_request(req_id: int):
             name=req.name,
             role=req.role,
             class_id=class_id,
-            school_id=DEFAULT_SCHOOL_ID
+            school_id=school_id
         )
         db.add(teacher)
         req.status = "approved"
@@ -542,10 +618,11 @@ def approve_request(req_id: int):
 
 @app.route("/requests/<int:req_id>/reject", methods=["POST"])
 def reject_request(req_id: int):
+    school_id = get_web_school_id()
     db = SessionLocal()
     req = db.query(RegistrationRequest).filter(
         RegistrationRequest.id == req_id,
-        RegistrationRequest.school_id == DEFAULT_SCHOOL_ID,
+        RegistrationRequest.school_id == school_id,
         RegistrationRequest.status == "pending"
     ).first()
     if req:
@@ -557,10 +634,14 @@ def reject_request(req_id: int):
 
 @app.route("/schools")
 def schools_page():
-    from repositories import get_all_schools
-    schools = get_all_schools()
-    return render_template_string(TEMPLATE, page="schools", schools=schools,
-                                  pending_count=_pending_count())
+    schools = get_all_schools_data()
+    return render_template_string(
+        TEMPLATE, page="schools", schools=schools,
+        pending_count=_pending_count(get_web_school_id()),
+        all_schools=schools,
+        current_school_id=get_web_school_id(),
+    )
+
 
 @app.route("/schools", methods=["POST"])
 def create_school():
@@ -571,13 +652,58 @@ def create_school():
     return redirect(url_for("schools_page"))
 
 
+@app.route("/schools/<int:school_id>/import", methods=["GET", "POST"])
+def import_students(school_id):
+    if request.method == "GET":
+        # Показать страницу импорта
+        from repositories import get_all_schools
+        schools = get_all_schools()
+        school_name = next((s["name"] for s in schools if s["id"] == school_id), f"Школа {school_id}")
+        return render_template_string(
+            TEMPLATE, page="import",
+            school_id=school_id, school_name=school_name,
+            pending_count=_pending_count(school_id),
+            all_schools=schools,
+            current_school_id=get_web_school_id(),
+        )
+    else:
+        # Обработка загруженного файла
+        file = request.files.get("file")
+        if not file or not file.filename.endswith(".xlsx"):
+            return "Ошибка: нужен файл .xlsx", 400
+
+        # Сохраняем временно
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+            file.save(tmp.name)
+            tmp_path = tmp.name
+
+        try:
+            result = import_from_excel(tmp_path, school_id)
+        finally:
+            os.unlink(tmp_path)
+
+        schools = get_all_schools_data()
+        school_name = next((s["name"] for s in schools if s["id"] == school_id), f"Школа {school_id}")
+
+        return render_template_string(
+            TEMPLATE, page="import",
+            school_id=school_id, school_name=school_name,
+            result=result,
+            pending_count=_pending_count(school_id),
+            all_schools=schools,
+            current_school_id=get_web_school_id(),
+        )
+
+
 @app.route("/download_excel")
 def download_excel():
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment
     from datetime import date
+    school_id = get_web_school_id()
     date_str = request.args.get("date", date.today().strftime("%Y-%m-%d"))
-    sessions = _load_sessions(date_str)
+    sessions = _load_sessions(date_str, school_id)
     wb = Workbook()
     ws = wb.active
     ws.title = f"Сводка {date_str}"

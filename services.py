@@ -5,26 +5,42 @@ from repositories import (
     get_teacher_by_telegram_id, get_available_classes, get_students_by_class,
     create_session, add_records, toggle_student_presence, finish_session,
     get_active_sessions, get_sessions_for_report, CreatedSession, SessionAlreadyExists,
+    delete_session as repo_delete_session, get_db as repo_get_db,
 )
 from config import ADMIN_TELEGRAM_ID
+from core.school_context import get_current_school_id
 
 
 class AttendanceService:
 
     @staticmethod
-    def start_attendance(telegram_id: int, class_id: int):
+    def start_attendance(telegram_id: int, class_id: int, is_admin_user: bool = False):
         teacher = get_teacher_by_telegram_id(telegram_id)
         if not teacher:
             return None, "Вы не зарегистрированы. Обратитесь к администратору."
-        if class_id not in {c.id for c in get_available_classes(date.today())}:
+
+        # Для обычного учителя проверяем, что класс свободен
+        if not is_admin_user and class_id not in {c.id for c in get_available_classes(date.today())}:
             return None, "Этот класс уже занят или недоступен."
+
+        # Администратор может перезаписывать существующую сессию
+        if is_admin_user:
+            from database import AttendanceSession
+            with repo_get_db() as db:
+                old = db.query(AttendanceSession).filter(
+                    AttendanceSession.class_id == class_id,
+                    AttendanceSession.session_date == date.today(),
+                    AttendanceSession.school_id == get_current_school_id(),
+                ).first()
+                if old:
+                    db.delete(old)
+                    db.flush()
+
         try:
             session = create_session(teacher.id, class_id)
         except SessionAlreadyExists:
-            # Гонка: кто-то успел создать сессию для этого класса между проверкой
-            # get_available_classes и нашим INSERT. Сообщение то же самое,
-            # что и при обычной недоступности — пользователю не нужно знать детали.
             return None, "Этот класс уже занят или недоступен."
+
         students = get_students_by_class(class_id)
         add_records(session.id, [s.id for s in students])
         return session, students

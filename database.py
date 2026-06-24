@@ -1,13 +1,14 @@
 # database.py
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Date, ForeignKey, UniqueConstraint, Index
+from sqlalchemy import create_engine, Column, BigInteger, Integer, String, Boolean, DateTime, Date, ForeignKey, UniqueConstraint, Index
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from datetime import datetime, date
 from config import DATABASE_URL
 
 engine = create_engine(
     DATABASE_URL,
-    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
     echo=False,
+    pool_size=10,
+    max_overflow=5,
 )
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 Base = declarative_base()
@@ -31,7 +32,7 @@ class Teacher(Base):
     __tablename__ = "teachers"
 
     id = Column(Integer, primary_key=True)
-    telegram_id = Column(Integer, nullable=False, index=True)
+    telegram_id = Column(BigInteger, nullable=False, index=True)        # <-- BigInteger
     name = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False, default="subject_teacher")
     class_id = Column(Integer, ForeignKey("classes.id"), nullable=True)
@@ -50,9 +51,8 @@ class Class(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String(50), nullable=False)
-    # Новые поля – необязательные, но заполним при инициализации
-    grade = Column(Integer, nullable=True)          # например, 5, 6, …, 11
-    letter = Column(String(5), nullable=True)       # "А", "Б", "В", "" для общегородских
+    grade = Column(Integer, nullable=True)
+    letter = Column(String(5), nullable=True)
 
     school_id = Column(Integer, ForeignKey("schools.id"), nullable=False, default=1)
 
@@ -114,7 +114,7 @@ class RegistrationRequest(Base):
     __tablename__ = "registration_requests"
 
     id = Column(Integer, primary_key=True)
-    telegram_id = Column(Integer, nullable=False)
+    telegram_id = Column(BigInteger, nullable=False)                 # <-- BigInteger
     name = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False)
     class_name = Column(String(50), nullable=True)
