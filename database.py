@@ -32,15 +32,16 @@ class Teacher(Base):
     __tablename__ = "teachers"
 
     id = Column(Integer, primary_key=True)
-    telegram_id = Column(BigInteger, nullable=False, index=True)        # <-- BigInteger
+    telegram_id = Column(BigInteger, nullable=False, index=True)
     name = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False, default="subject_teacher")
-    class_id = Column(Integer, ForeignKey("classes.id"), nullable=True)
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=False, default=1)
+    is_active = Column(Boolean, nullable=False, default=True)    # <-- новое поле
+    class_id = Column(Integer, ForeignKey("classes.id", ondelete="SET NULL"), nullable=True)
+    school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, default=1)
 
     class_ = relationship("Class", back_populates="teacher")
     school = relationship("School", back_populates="teachers")
-    sessions = relationship("AttendanceSession", back_populates="teacher")
+    sessions = relationship("AttendanceSession", back_populates="teacher", foreign_keys="AttendanceSession.teacher_id")
 
 
 class Class(Base):
@@ -54,7 +55,7 @@ class Class(Base):
     grade = Column(Integer, nullable=True)
     letter = Column(String(5), nullable=True)
 
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=False, default=1)
+    school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, default=1)
 
     students = relationship("Student", back_populates="class_")
     sessions = relationship("AttendanceSession", back_populates="class_")
@@ -67,12 +68,12 @@ class Student(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String(255), nullable=False)
-    class_id = Column(Integer, ForeignKey("classes.id"), nullable=False, index=True)
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=False, default=1)
+    class_id = Column(Integer, ForeignKey("classes.id", ondelete="CASCADE"), nullable=False, index=True)
+    school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, default=1)
 
     class_ = relationship("Class", back_populates="students")
     school = relationship("School", back_populates="students")
-    records = relationship("AttendanceRecord", back_populates="student")
+    records = relationship("AttendanceRecord", back_populates="student", cascade="all, delete-orphan")
 
 
 class AttendanceSession(Base):
@@ -83,13 +84,13 @@ class AttendanceSession(Base):
     )
 
     id = Column(Integer, primary_key=True)
-    teacher_id = Column(Integer, ForeignKey("teachers.id"), nullable=False)
-    class_id = Column(Integer, ForeignKey("classes.id"), nullable=False)
+    teacher_id = Column(Integer, ForeignKey("teachers.id", ondelete="SET NULL"), nullable=True)  # <-- SET NULL
+    class_id = Column(Integer, ForeignKey("classes.id", ondelete="CASCADE"), nullable=False)
     session_date = Column(Date, default=date.today, nullable=False)
     start_time = Column(DateTime, default=datetime.now, nullable=False)
     end_time = Column(DateTime, nullable=True)
     status = Column(String(20), default="active", nullable=False, index=True)
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=False, default=1)
+    school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, default=1)
 
     teacher = relationship("Teacher", back_populates="sessions")
     class_ = relationship("Class", back_populates="sessions")
@@ -101,8 +102,8 @@ class AttendanceRecord(Base):
     __tablename__ = "attendance_records"
 
     id = Column(Integer, primary_key=True)
-    session_id = Column(Integer, ForeignKey("attendance_sessions.id"), nullable=False, index=True)
-    student_id = Column(Integer, ForeignKey("students.id"), nullable=False, index=True)
+    session_id = Column(Integer, ForeignKey("attendance_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True)
     is_present = Column(Boolean, default=True, nullable=False)
     reason = Column(String(255), nullable=True)
 
@@ -114,12 +115,12 @@ class RegistrationRequest(Base):
     __tablename__ = "registration_requests"
 
     id = Column(Integer, primary_key=True)
-    telegram_id = Column(BigInteger, nullable=False)                 # <-- BigInteger
+    telegram_id = Column(BigInteger, nullable=False)
     name = Column(String(255), nullable=False)
     role = Column(String(50), nullable=False)
     class_name = Column(String(50), nullable=True)
     status = Column(String(20), default="pending", nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.now, nullable=False)
-    school_id = Column(Integer, ForeignKey("schools.id"), nullable=False, default=1)
+    school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, default=1)
 
     school = relationship("School", back_populates="registration_requests")

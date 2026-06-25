@@ -163,19 +163,18 @@ async def _show_teacher_page(target, page: int = 1, edit: bool = False) -> None:
 def _teacher_list_keyboard(teachers, current_page: int, total_pages: int) -> InlineKeyboardMarkup:
     rows = []
     for t in teachers:
+        status_icon = "🟢" if t.is_active else "🔴"
         school_part = f" · 🏫 {t.school_name}" if t.school_name else ""
-        label = f"{t.name} · {ROLE_LABELS.get(t.role, t.role)} · {t.class_name or 'нет'}{school_part}"
+        label = f"{status_icon} {t.name} · {ROLE_LABELS.get(t.role, t.role)} · {t.class_name or 'нет'}{school_part}"
         rows.append([InlineKeyboardButton(text=label, callback_data=f"admin:teacher:{t.id}")])
 
-    # Навигация
     nav_buttons = []
     if current_page > 1:
         nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"admin:teachers_page:{current_page - 1}"))
     nav_buttons.append(InlineKeyboardButton(text=f"{current_page}/{total_pages}", callback_data="admin:noop"))
     if current_page < total_pages:
         nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"admin:teachers_page:{current_page + 1}"))
-
-    if len(nav_buttons) > 1:  # показываем навигацию только если есть куда листать
+    if len(nav_buttons) > 1:
         rows.append(nav_buttons)
 
     rows.append([InlineKeyboardButton(text="📩 Заявки", callback_data="admin:requests")])
@@ -259,7 +258,7 @@ async def approve_request_handler(callback: CallbackQuery) -> None:
     if success:
         await callback.answer("✅ Заявка одобрена, пользователь добавлен.")
     else:
-        await callback.answer("❌ Ошибка при одобрении.")
+        await callback.answer("❌ Не удалось одобрить. Возможно, пользователь уже активен в этой школе.")
     await show_requests(callback)
 
 
@@ -288,18 +287,52 @@ async def _show_teacher_card(message, teacher_id: int) -> None:
     if not t:
         await message.edit_text("Пользователь не найден.")
         return
+    status_text = "Активен" if t.is_active else "Неактивен"
     text = (f"👤 {t.name} (ID: {t.telegram_id})\n"
             f"Роль: {ROLE_LABELS.get(t.role, t.role)}\n"
             f"Класс: {t.class_name or 'нет'}\n"
+            f"Статус: {status_text}\n"
             f"🏫 Школа: {t.school_name or 'не указана'}")
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🔄 Сменить роль",    callback_data=f"admin:chrole:{teacher_id}")],
+
+    kb_buttons = [
+        [InlineKeyboardButton(text="🔄 Сменить роль", callback_data=f"admin:chrole:{teacher_id}")],
         [InlineKeyboardButton(text="🏫 Назначить класс", callback_data=f"admin:setclass:{teacher_id}")],
-        [InlineKeyboardButton(text="🚫 Убрать класс",    callback_data=f"admin:rmclass:{teacher_id}")],
-        [InlineKeyboardButton(text="🗑 Удалить",          callback_data=f"admin:delteacher:{teacher_id}")],
-        [InlineKeyboardButton(text="↩️ Назад к списку",  callback_data="admin:back_teachers")],
+        [InlineKeyboardButton(text="🚫 Убрать класс", callback_data=f"admin:rmclass:{teacher_id}")],
+        [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"admin:delete_perm:{teacher_id}")],
+        [InlineKeyboardButton(text="↩️ Назад к списку", callback_data="admin:back_teachers")],
+    ]
+
+    await message.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons))
+
+
+# Удаление (с подтверждением)
+@admin_router.callback_query(F.data.startswith("admin:delete_perm:"))
+async def permanent_delete_confirm(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        return
+    teacher_id = int(callback.data.split(":")[-1])
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"admin:delete_perm_ok:{teacher_id}")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin:teacher:{teacher_id}")],
     ])
-    await message.edit_text(text, reply_markup=kb)
+    await callback.message.edit_text(
+        "Удалить пользователя навсегда?\n"
+        "Его переклички сохранятся, но он сможет зарегистрироваться заново.",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@admin_router.callback_query(F.data.startswith("admin:delete_perm_ok:"))
+async def permanent_delete_execute(callback: CallbackQuery) -> None:
+    if not is_admin(callback.from_user.id):
+        return
+    teacher_id = int(callback.data.split(":")[-1])
+    if delete_teacher(teacher_id):
+        await callback.answer("Учитель удалён. История сохранена.")
+        await _show_teacher_page(callback.message, page=1, edit=True)
+    else:
+        await callback.answer("Ошибка.")
 
 
 @admin_router.callback_query(F.data.startswith("admin:rmclass:"))
@@ -310,29 +343,6 @@ async def remove_class(callback: CallbackQuery) -> None:
     update_teacher_class(teacher_id, None)
     await callback.answer("Класс снят.")
     await _show_teacher_card(callback.message, teacher_id)
-
-
-@admin_router.callback_query(F.data.startswith("admin:delteacher:"))
-async def delete_teacher_confirm(callback: CallbackQuery) -> None:
-    if not is_admin(callback.from_user.id):
-        return
-    teacher_id = int(callback.data.split(":")[-1])
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Да, удалить", callback_data=f"admin:delconfirm:{teacher_id}")],
-        [InlineKeyboardButton(text="❌ Отмена",       callback_data=f"admin:teacher:{teacher_id}")],
-    ])
-    await callback.message.edit_text("Удалить пользователя? Это действие необратимо.", reply_markup=kb)
-    await callback.answer()
-
-
-@admin_router.callback_query(F.data.startswith("admin:delconfirm:"))
-async def delete_teacher_execute(callback: CallbackQuery) -> None:
-    if not is_admin(callback.from_user.id):
-        return
-    teacher_id = int(callback.data.split(":")[-1])
-    delete_teacher(teacher_id)
-    await callback.answer("Пользователь удалён.")
-    await _show_teacher_page(callback.message, page=1, edit=True)
 
 
 @admin_router.callback_query(F.data.startswith("admin:chrole:"))
@@ -444,14 +454,12 @@ async def _show_student_page(message, class_id: int, page: int = 1, edit: bool =
             for s in students]
     rows.append([InlineKeyboardButton(text="➕ Добавить ученика", callback_data=f"admin:addstudent:{class_id}")])
 
-    # Навигация
     nav_buttons = []
     if page > 1:
         nav_buttons.append(InlineKeyboardButton(text="◀️", callback_data=f"admin:students_page:{class_id}:{page - 1}"))
     nav_buttons.append(InlineKeyboardButton(text=f"{page}/{total_pages}", callback_data="admin:noop"))
     if page < total_pages:
         nav_buttons.append(InlineKeyboardButton(text="▶️", callback_data=f"admin:students_page:{class_id}:{page + 1}"))
-
     if len(nav_buttons) > 1:
         rows.append(nav_buttons)
 
@@ -494,7 +502,6 @@ async def process_student_name(message: Message, state: FSMContext) -> None:
     create_student(name=name, class_id=class_id)
     await state.clear()
     await message.answer(f"✅ Ученик «{name}» добавлен.")
-    # После добавления возвращаемся к списку учеников (страница 1)
     await _show_student_page(message, class_id, page=1)
 
 
@@ -560,7 +567,6 @@ async def switch_school(callback: CallbackQuery) -> None:
     set_current_school_id(school_id)
     school_name = get_current_school_name() or f"Школа {school_id}"
 
-    # 🔧 Гарантируем, что администратор присутствует в этой школе
     db = SessionLocal()
     existing = db.query(Teacher).filter(
         Teacher.telegram_id == callback.from_user.id,
@@ -571,7 +577,8 @@ async def switch_school(callback: CallbackQuery) -> None:
             telegram_id=callback.from_user.id,
             name="Администратор",
             role="admin",
-            school_id=school_id
+            school_id=school_id,
+            is_active=True
         )
         db.add(admin_teacher)
         db.commit()
@@ -584,6 +591,7 @@ async def switch_school(callback: CallbackQuery) -> None:
         reply_markup=build_menu_keyboard(callback.from_user.id)
     )
     await callback.answer()
+
 
 @admin_router.message(Command("restore_admin"))
 async def restore_admin(message: Message) -> None:

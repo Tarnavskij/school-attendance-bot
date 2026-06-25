@@ -1,11 +1,11 @@
-# web_viewer.py — с импортом учеников для каждой школы
+# web_viewer.py — обновлён с учётом проверки активных учителей
 import io
 from flask import Flask, render_template_string, request, send_file, redirect, url_for, session
 from sqlalchemy.orm import joinedload
 from sqlalchemy import func
 from database import SessionLocal, AttendanceSession, AttendanceRecord, RegistrationRequest, Teacher, Class
 from config import DEFAULT_SCHOOL_ID
-from import_students import import_from_excel   # <-- новая зависимость
+from import_students import import_from_excel
 
 app = Flask(__name__)
 app.secret_key = "super-secret-key-change-me-in-production"
@@ -548,9 +548,11 @@ def requests_page():
         RegistrationRequest.school_id == school_id
     ).order_by(RegistrationRequest.created_at.desc()).all()
 
+    # ID активных учителей этой школы
     existing_ids = set(
         t.telegram_id for t in db.query(Teacher.telegram_id).filter(
-            Teacher.school_id == school_id
+            Teacher.school_id == school_id,
+            Teacher.is_active == True
         ).all()
     )
 
@@ -583,12 +585,14 @@ def approve_request(req_id: int):
     ).first()
 
     if req:
+        # Проверяем, нет ли уже активного учителя с таким telegram_id в этой школе
         already = db.query(Teacher).filter(
             Teacher.telegram_id == req.telegram_id,
-            Teacher.school_id == school_id
+            Teacher.school_id == school_id,
+            Teacher.is_active == True
         ).first()
         if already:
-            req.status = "approved"
+            req.status = "rejected"
             db.commit()
             db.close()
             return redirect(url_for("requests_page"))
@@ -655,7 +659,6 @@ def create_school():
 @app.route("/schools/<int:school_id>/import", methods=["GET", "POST"])
 def import_students(school_id):
     if request.method == "GET":
-        # Показать страницу импорта
         from repositories import get_all_schools
         schools = get_all_schools()
         school_name = next((s["name"] for s in schools if s["id"] == school_id), f"Школа {school_id}")
@@ -667,12 +670,10 @@ def import_students(school_id):
             current_school_id=get_web_school_id(),
         )
     else:
-        # Обработка загруженного файла
         file = request.files.get("file")
         if not file or not file.filename.endswith(".xlsx"):
             return "Ошибка: нужен файл .xlsx", 400
 
-        # Сохраняем временно
         import tempfile, os
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
             file.save(tmp.name)
