@@ -642,3 +642,12 @@ def get_class_teacher_for_class(class_id: int) -> TeacherDTO | None:
             class_name=t.class_.name if t.class_ else None,
             school_name=t.school.name if t.school else None
         )
+
+def has_pending_request(telegram_id: int, school_id: int) -> bool:
+    """Возвращает True, если у пользователя уже есть необработанная заявка в данной школе."""
+    with get_db() as db:
+        return db.query(RegistrationRequest).filter(
+            RegistrationRequest.telegram_id == telegram_id,
+            RegistrationRequest.school_id == school_id,
+            RegistrationRequest.status == "pending",
+        ).first() is not None
