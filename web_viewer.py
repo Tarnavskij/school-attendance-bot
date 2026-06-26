@@ -200,7 +200,6 @@ TEMPLATE = """<!DOCTYPE html>
       <tr>
         <td>{{ row.teacher }}</td>
         <td>{{ row.class }}</td>
-        {# absent уже экранирован через escape() в Python, nl2br применён явно #}
         <td style="white-space:pre-line">{{ row.absent }}</td>
         <td style="color:rgba(255,255,255,0.4)">{{ row.time }}</td>
       </tr>
@@ -331,8 +330,7 @@ def _pending_count(school_id: int) -> int:
 
 
 def _load_sessions(date_str: str, school_id: int) -> list:
-    """Загружает сессии по session_date (индексируемое поле)."""
-    from datetime import date as date_type
+    """Загружает сессии по session_date. Возвращает только отсутствующих."""
     db = SessionLocal()
     try:
         sessions = (
@@ -343,20 +341,24 @@ def _load_sessions(date_str: str, school_id: int) -> list:
                 joinedload(AttendanceSession.records).joinedload(AttendanceRecord.student),
             )
             .filter(
-                AttendanceSession.session_date == date_str,   # индекс по session_date
+                AttendanceSession.session_date == date_str,
                 AttendanceSession.status.in_(["completed", "auto_completed"]),
                 AttendanceSession.school_id == school_id,
             )
             .all()
         )
-        # Детачим данные до закрытия сессии
         result = []
         for s in sessions:
             result.append({
                 "teacher": s.teacher.name if s.teacher else "?",
                 "class": s.class_.name if s.class_ else "?",
                 "end_time": s.end_time,
-                "records": [(r.student.name, r.reason) for r in s.records],
+                # список только отсутствующих: (name, reason)
+                "absent": [
+                    (r.student.name, r.reason)
+                    for r in s.records
+                    if not r.is_present
+                ],
                 "class_id": s.class_id,
             })
         return result
@@ -382,14 +384,10 @@ def index():
 
     rows = []
     for s in raw_sessions:
-        absent = [(name, reason or "—") for name, reason in s["records"] if reason is not None or True]
-        absent = [(name, reason) for name, reason in s["records"]]
-        absent_entries = [(name, reason or "—") for name, reason in absent if name]
-
-        # XSS-fix: экранируем данные из БД, используем plain text с переносами
+        absent_entries = s["absent"]  # уже только отсутствующие
         if absent_entries:
             absent_text = "\n".join(
-                f"{escape(name)} — {escape(reason)}" for name, reason in absent_entries
+                f"{escape(name)} — {escape(reason or '—')}" for name, reason in absent_entries
             )
         else:
             absent_text = "нет"
@@ -403,7 +401,7 @@ def index():
 
     stats = {
         "total": len(raw_sessions),
-        "absent": sum(1 for s in raw_sessions for name, _ in s["records"]),
+        "absent": sum(len(s["absent"]) for s in raw_sessions),
         "classes": len({s["class_id"] for s in raw_sessions}),
     } if raw_sessions else None
 
@@ -429,7 +427,6 @@ def requests_page():
             .order_by(RegistrationRequest.created_at.desc())
             .all()
         )
-        # Один запрос вместо двух отдельных
         active_teacher_ids = {
             row[0]
             for row in db.query(Teacher.telegram_id).filter(
@@ -463,7 +460,6 @@ def requests_page():
 @app.route("/requests/<int:req_id>/approve", methods=["POST"])
 @require_auth
 def approve_request_web(req_id: int):
-    """Делегируем в репозиторий, чтобы не дублировать бизнес-логику."""
     from core.school_context import set_current_school_id
     school_id = get_web_school_id()
     set_current_school_id(school_id)
@@ -564,8 +560,9 @@ def download_excel():
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal="center")
     for s in raw_sessions:
-        absent = [(name, reason or "—") for name, reason in s["records"]]
-        absent_text = "\n".join(f"{name} — {reason}" for name, reason in absent) if absent else "нет"
+        absent_text = "\n".join(
+            f"{name} — {reason or '—'}" for name, reason in s["absent"]
+        ) if s["absent"] else "нет"
         ws.append([
             s["teacher"],
             s["class"],
