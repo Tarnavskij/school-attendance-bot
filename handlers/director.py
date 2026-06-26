@@ -35,14 +35,28 @@ async def _show_class_list(target, edit: bool = False) -> None:
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_to_menu_btn()]])
     else:
         text = "🏫 Выберите класс для просмотра отсутствующих сегодня:"
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            *[[InlineKeyboardButton(text=c.name, callback_data=f"dir:view:{c.id}")] for c in classes],
-            [back_to_menu_btn()],
-        ])
+        kb = _build_class_grid_keyboard(classes, callback_prefix="dir:view")
+
     if edit:
         await target.edit_text(text, reply_markup=kb)
     else:
         await target.answer(text, reply_markup=kb)
+
+
+def _build_class_grid_keyboard(classes, callback_prefix: str) -> InlineKeyboardMarkup:
+    """Группирует классы по параллелям и добавляет кнопку 'Назад'."""
+    groups: dict[int, list] = {}
+    for c in classes:
+        grade = c.grade or 0
+        groups.setdefault(grade, []).append(c)
+
+    rows = []
+    for grade in sorted(groups.keys()):
+        buttons = [InlineKeyboardButton(text=c.name, callback_data=f"{callback_prefix}:{c.id}") for c in groups[grade]]
+        rows.append(buttons)
+
+    rows.append([back_to_menu_btn()])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 @director_router.callback_query(F.data.startswith("dir:view:"))

@@ -37,6 +37,8 @@ class TeacherDTO:
 class ClassDTO:
     id: int
     name: str
+    grade: int | None = None
+    letter: str | None = None
 
 
 @dataclass
@@ -217,23 +219,26 @@ def activate_teacher(teacher_id: int) -> bool:
 
 def get_all_classes() -> list[ClassDTO]:
     with get_db() as db:
-        return [ClassDTO(id=c.id, name=c.name)
-                for c in db.query(Class).filter(Class.school_id == get_current_school_id()).all()]
+        return [ClassDTO(id=c.id, name=c.name, grade=c.grade, letter=c.letter)
+                for c in db.query(Class).filter(Class.school_id == get_current_school_id())
+                .order_by(Class.grade, Class.letter).all()]
 
 
 def get_available_classes(today_date: date, is_admin_user: bool = False) -> list[ClassDTO]:
     """Классы, доступные для выбора. Администратору – все, учителям – только незанятые."""
     if is_admin_user:
         with get_db() as db:
-            return [ClassDTO(id=c.id, name=c.name)
-                    for c in db.query(Class).filter(Class.school_id == get_current_school_id()).all()]
+            return [ClassDTO(id=c.id, name=c.name, grade=c.grade, letter=c.letter)
+                    for c in db.query(Class).filter(Class.school_id == get_current_school_id())
+                    .order_by(Class.grade, Class.letter).all()]
     with get_db() as db:
         taken_ids = (db.query(AttendanceSession.class_id)
                      .filter(AttendanceSession.session_date == today_date,
                              AttendanceSession.school_id == get_current_school_id()))
-        return [ClassDTO(id=c.id, name=c.name)
+        return [ClassDTO(id=c.id, name=c.name, grade=c.grade, letter=c.letter)
                 for c in db.query(Class).filter(Class.school_id == get_current_school_id(),
-                                                ~Class.id.in_(taken_ids)).all()]
+                                                ~Class.id.in_(taken_ids))
+                .order_by(Class.grade, Class.letter).all()]
 
 
 def get_students_by_class(class_id: int) -> list[StudentDTO]:

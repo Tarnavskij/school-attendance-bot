@@ -48,10 +48,21 @@ async def start_attendance(message: Message, state: FSMContext) -> None:
 
 
 def _build_class_keyboard(available_classes) -> InlineKeyboardMarkup:
-    buttons = []
+    """Группирует классы по параллелям (grade) и выводит кнопки рядами."""
+    # Группируем классы по grade (параллели)
+    groups: dict[int, list] = {}
     for c in available_classes:
-        buttons.append(InlineKeyboardButton(text=c.name, callback_data=f"att:class:{c.id}"))
-    rows = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
+        grade = c.grade or 0  # если grade отсутствует, объединяем в группу 0
+        groups.setdefault(grade, []).append(c)
+
+    rows = []
+    # Сортируем группы по номеру параллели, затем по букве внутри группы
+    for grade in sorted(groups.keys()):
+        # Внутри группы классы уже отсортированы благодаря БД
+        buttons = [InlineKeyboardButton(text=c.name, callback_data=f"att:class:{c.id}") for c in groups[grade]]
+        # Кнопки в одной строке (максимум 3, но столько, сколько есть в параллели)
+        rows.append(buttons)
+
     rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="att:cancel_flow")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
