@@ -23,11 +23,8 @@ async def my_class_handler(message: Message) -> None:
         if not classes:
             await message.answer("Нет доступных классов.")
             return
-        # Строим сетку по 2 кнопки в ряд
-        buttons = [InlineKeyboardButton(text=c.name, callback_data=f"mc:view:{c.id}") for c in classes]
-        rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
-        rows.append([back_to_menu_btn()])
-        kb = InlineKeyboardMarkup(inline_keyboard=rows)
+        # Группировка по параллелям
+        kb = _build_class_grid_keyboard(classes, callback_prefix="mc:view")
         await message.answer("Выберите класс для просмотра:", reply_markup=kb)
         return
 
@@ -87,8 +84,23 @@ async def apply_reason(callback: CallbackQuery) -> None:
 
     set_absence_reason(student_id, class_id, date.today(), reason)
     await callback.answer("Причина сохранена.")
-    # Редактируем текущее сообщение, возвращая список отсутствующих
     await _show_absent_list(callback.message, class_id, edit=True)
+
+
+def _build_class_grid_keyboard(classes, callback_prefix: str) -> InlineKeyboardMarkup:
+    """Создаёт клавиатуру с классами, сгруппированными по параллелям."""
+    groups: dict[int, list] = {}
+    for c in classes:
+        grade = c.grade or 0
+        groups.setdefault(grade, []).append(c)
+
+    rows = []
+    for grade in sorted(groups.keys()):
+        buttons = [InlineKeyboardButton(text=c.name, callback_data=f"{callback_prefix}:{c.id}") for c in groups[grade]]
+        rows.append(buttons)
+
+    rows.append([back_to_menu_btn()])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _show_absent_list(message: Message, class_id: int, edit: bool = False) -> None:
