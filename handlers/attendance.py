@@ -29,14 +29,22 @@ async def start_attendance(message: Message, state: FSMContext) -> None:
         await message.answer("У вас нет прав для проведения переклички.")
         return
 
-    # Администратору не показываем карточку – он может проводить перекличку в любое время
+    teacher = get_teacher_by_telegram_id(message.from_user.id)
+    if not teacher:
+        await message.answer("Вы не зарегистрированы.")
+        return
+
+    # Администратору не показываем карточку
     if not is_admin(message.from_user.id):
         card = get_today_session_card(message.from_user.id)
         if card:
             await message.answer(card)
             return
 
-    available = get_available_classes(date.today(), is_admin_user=is_admin(message.from_user.id))
+    # Для обычного учителя используем его школу, для админа — глобальный контекст
+    school_id = teacher.school_id if not is_admin(message.from_user.id) else None
+    available = get_available_classes(date.today(), school_id=school_id,
+                                      is_admin_user=is_admin(message.from_user.id))
     if not available:
         await message.answer("Все классы уже отмечены на сегодня.")
         return
@@ -48,19 +56,21 @@ async def start_attendance(message: Message, state: FSMContext) -> None:
 
 
 def _build_class_keyboard(available_classes) -> InlineKeyboardMarkup:
-    """Группирует классы по параллелям (grade) и выводит кнопки рядами."""
-    # Группируем классы по grade (параллели)
+    """Группирует классы по параллелям (grade) и выводит кнопки рядами.
+    В callback_data теперь передаётся school_id для однозначной идентификации школы класса."""
     groups: dict[int, list] = {}
     for c in available_classes:
-        grade = c.grade or 0  # если grade отсутствует, объединяем в группу 0
+        grade = c.grade or 0
         groups.setdefault(grade, []).append(c)
 
     rows = []
-    # Сортируем группы по номеру параллели, затем по букве внутри группы
     for grade in sorted(groups.keys()):
-        # Внутри группы классы уже отсортированы благодаря БД
-        buttons = [InlineKeyboardButton(text=c.name, callback_data=f"att:class:{c.id}") for c in groups[grade]]
-        # Кнопки в одной строке (максимум 3, но столько, сколько есть в параллели)
+        buttons = []
+        for c in groups[grade]:
+            buttons.append(InlineKeyboardButton(
+                text=c.name,
+                callback_data=f"att:class:{c.id}:{c.school_id}"
+            ))
         rows.append(buttons)
 
     rows.append([InlineKeyboardButton(text="❌ Отмена", callback_data="att:cancel_flow")])
@@ -85,10 +95,14 @@ async def cancel_flow(callback: CallbackQuery, state: FSMContext) -> None:
 
 @attendance_router.callback_query(AttendanceStates.choosing_class, F.data.startswith("att:class:"))
 async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
-    class_id = int(callback.data.split(":")[-1])
+    _, _, class_id_str, school_id_str = callback.data.split(":")
+    class_id = int(class_id_str)
+    school_id = int(school_id_str)
+
     session, result = AttendanceService.start_attendance(
         callback.from_user.id, class_id,
-        is_admin_user=is_admin(callback.from_user.id)
+        is_admin_user=is_admin(callback.from_user.id),
+        teacher_school_id=school_id
     )
 
     if session is None:
@@ -101,8 +115,9 @@ async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer()
         return
 
-    await state.update_data(session_id=session.id, class_id=class_id)
-    students = get_students_by_class(class_id)
+    # Сохраняем school_id в состоянии, чтобы использовать его при переключении учеников
+    await state.update_data(session_id=session.id, class_id=class_id, school_id=school_id)
+    students = get_students_by_class(class_id, school_id=school_id)
     kb = _build_marking_keyboard(students, session.id, [])
 
     await callback.message.edit_text(
@@ -125,7 +140,8 @@ async def toggle_student(callback: CallbackQuery, state: FSMContext) -> None:
     student_id = int(parts[3])
     AttendanceService.toggle_student(session_id, student_id)
     data = await state.get_data()
-    students = get_students_by_class(data["class_id"])
+    school_id = data.get("school_id")      # берём сохранённый school_id
+    students = get_students_by_class(data["class_id"], school_id=school_id)
     records = get_session_records(session_id)
     kb = _build_marking_keyboard(students, session_id, records)
     await callback.message.edit_reply_markup(reply_markup=kb)

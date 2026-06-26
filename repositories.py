@@ -28,6 +28,7 @@ class TeacherDTO:
     name: str
     role: str
     is_active: bool
+    school_id: int
     class_id: int | None
     class_name: str | None
     school_name: str | None
@@ -37,6 +38,7 @@ class TeacherDTO:
 class ClassDTO:
     id: int
     name: str
+    school_id: int
     grade: int | None = None
     letter: str | None = None
 
@@ -76,27 +78,8 @@ class SessionAlreadyExists(Exception):
 
 
 def get_teacher_by_telegram_id(telegram_id: int) -> TeacherDTO | None:
-    """Возвращает активного учителя в текущей школе (для админа) или в любой школе (для обычных пользователей)."""
+    """Возвращает активного учителя в любой школе."""
     with get_db() as db:
-        # Если запрос от администратора – ищем в текущей школе
-        if get_current_school_id() == 1:   # админский контекст всегда 1, но для безопасности проверяем роль
-            from core.roles import is_admin
-            if is_admin(telegram_id):
-                t = db.query(Teacher).options(joinedload(Teacher.school)).filter(
-                    Teacher.telegram_id == telegram_id,
-                    Teacher.school_id == get_current_school_id(),
-                    Teacher.is_active == True
-                ).first()
-                if not t:
-                    return None
-                return TeacherDTO(
-                    id=t.id, telegram_id=t.telegram_id, name=t.name,
-                    role=t.role, is_active=t.is_active,
-                    class_id=t.class_id,
-                    class_name=t.class_.name if t.class_ else None,
-                    school_name=t.school.name if t.school else None
-                )
-        # Для обычного пользователя ищем активного учителя в любой школе
         t = db.query(Teacher).options(joinedload(Teacher.school)).filter(
             Teacher.telegram_id == telegram_id,
             Teacher.is_active == True
@@ -106,6 +89,7 @@ def get_teacher_by_telegram_id(telegram_id: int) -> TeacherDTO | None:
         return TeacherDTO(
             id=t.id, telegram_id=t.telegram_id, name=t.name,
             role=t.role, is_active=t.is_active,
+            school_id=t.school_id,
             class_id=t.class_id,
             class_name=t.class_.name if t.class_ else None,
             school_name=t.school.name if t.school else None
@@ -118,6 +102,7 @@ def get_all_teachers() -> list[TeacherDTO]:
             TeacherDTO(
                 id=t.id, telegram_id=t.telegram_id, name=t.name,
                 role=t.role, is_active=t.is_active,
+                school_id=t.school_id,
                 class_id=t.class_id,
                 class_name=t.class_.name if t.class_ else None,
                 school_name=t.school.name if t.school else None
@@ -128,15 +113,18 @@ def get_all_teachers() -> list[TeacherDTO]:
         ]
 
 
-def create_teacher(telegram_id: int, name: str, role: str = "subject_teacher", class_id: int | None = None) -> TeacherDTO:
+def create_teacher(telegram_id: int, name: str, role: str = "subject_teacher",
+                   class_id: int | None = None, school_id: int | None = None) -> TeacherDTO:
+    sid = school_id if school_id is not None else get_current_school_id()
     with get_db() as db:
         t = Teacher(telegram_id=telegram_id, name=name, role=role, class_id=class_id,
-                    school_id=get_current_school_id(), is_active=True)
+                    school_id=sid, is_active=True)
         db.add(t)
         db.flush()
         return TeacherDTO(
             id=t.id, telegram_id=t.telegram_id, name=t.name,
             role=t.role, is_active=t.is_active,
+            school_id=t.school_id,
             class_id=t.class_id, class_name=None,
             school_name=None
         )
@@ -153,6 +141,7 @@ def get_teacher_card(teacher_id: int) -> TeacherDTO | None:
         return TeacherDTO(
             id=t.id, telegram_id=t.telegram_id, name=t.name,
             role=t.role, is_active=t.is_active,
+            school_id=t.school_id,
             class_id=t.class_id,
             class_name=t.class_.name if t.class_ else None,
             school_name=t.school.name if t.school else None
@@ -217,41 +206,44 @@ def activate_teacher(teacher_id: int) -> bool:
         return True
 
 
-def get_all_classes() -> list[ClassDTO]:
+def get_all_classes(school_id: int | None = None) -> list[ClassDTO]:
+    sid = school_id if school_id is not None else get_current_school_id()
     with get_db() as db:
-        return [ClassDTO(id=c.id, name=c.name, grade=c.grade, letter=c.letter)
-                for c in db.query(Class).filter(Class.school_id == get_current_school_id())
+        return [ClassDTO(id=c.id, name=c.name, school_id=c.school_id, grade=c.grade, letter=c.letter)
+                for c in db.query(Class).filter(Class.school_id == sid)
                 .order_by(Class.grade, Class.letter).all()]
 
 
-def get_available_classes(today_date: date, is_admin_user: bool = False) -> list[ClassDTO]:
-    """Классы, доступные для выбора. Администратору – все, учителям – только незанятые."""
+def get_available_classes(today_date: date, school_id: int | None = None, is_admin_user: bool = False) -> list[ClassDTO]:
+    sid = school_id if school_id is not None else get_current_school_id()
     if is_admin_user:
         with get_db() as db:
-            return [ClassDTO(id=c.id, name=c.name, grade=c.grade, letter=c.letter)
-                    for c in db.query(Class).filter(Class.school_id == get_current_school_id())
+            return [ClassDTO(id=c.id, name=c.name, school_id=c.school_id, grade=c.grade, letter=c.letter)
+                    for c in db.query(Class).filter(Class.school_id == sid)
                     .order_by(Class.grade, Class.letter).all()]
     with get_db() as db:
         taken_ids = (db.query(AttendanceSession.class_id)
                      .filter(AttendanceSession.session_date == today_date,
-                             AttendanceSession.school_id == get_current_school_id()))
-        return [ClassDTO(id=c.id, name=c.name, grade=c.grade, letter=c.letter)
-                for c in db.query(Class).filter(Class.school_id == get_current_school_id(),
+                             AttendanceSession.school_id == sid))
+        return [ClassDTO(id=c.id, name=c.name, school_id=c.school_id, grade=c.grade, letter=c.letter)
+                for c in db.query(Class).filter(Class.school_id == sid,
                                                 ~Class.id.in_(taken_ids))
                 .order_by(Class.grade, Class.letter).all()]
 
 
-def get_students_by_class(class_id: int) -> list[StudentDTO]:
+def get_students_by_class(class_id: int, school_id: int | None = None) -> list[StudentDTO]:
+    sid = school_id if school_id is not None else get_current_school_id()
     with get_db() as db:
         return [StudentDTO(id=s.id, name=s.name, class_id=s.class_id)
                 for s in db.query(Student).filter(Student.class_id == class_id,
-                                                  Student.school_id == get_current_school_id())
+                                                  Student.school_id == sid)
                 .order_by(Student.name).all()]
 
 
-def create_student(name: str, class_id: int) -> StudentDTO:
+def create_student(name: str, class_id: int, school_id: int | None = None) -> StudentDTO:
+    sid = school_id if school_id is not None else get_current_school_id()
     with get_db() as db:
-        s = Student(name=name, class_id=class_id, school_id=get_current_school_id())
+        s = Student(name=name, class_id=class_id, school_id=sid)
         db.add(s)
         db.flush()
         return StudentDTO(id=s.id, name=s.name, class_id=s.class_id)
@@ -267,11 +259,12 @@ def delete_student(student_id: int) -> bool:
         return True
 
 
-def create_session(teacher_id: int, class_id: int) -> CreatedSession:
+def create_session(teacher_id: int, class_id: int, school_id: int | None = None) -> CreatedSession:
+    sid = school_id if school_id is not None else get_current_school_id()
     today = date.today()
     with get_db() as db:
         s = AttendanceSession(teacher_id=teacher_id, class_id=class_id, session_date=today,
-                              school_id=get_current_school_id())
+                              school_id=sid)
         db.add(s)
         try:
             db.flush()
@@ -553,7 +546,8 @@ def reset_today_sessions() -> int:
         return count
 
 
-def get_teacher_session_today(teacher_id: int, today_date: date) -> SessionDTO | None:
+def get_teacher_session_today(teacher_id: int, today_date: date, school_id: int | None = None) -> SessionDTO | None:
+    sid = school_id if school_id is not None else get_current_school_id()
     with get_db() as db:
         s = db.query(AttendanceSession).options(
             joinedload(AttendanceSession.teacher),
@@ -563,7 +557,7 @@ def get_teacher_session_today(teacher_id: int, today_date: date) -> SessionDTO |
         ).filter(
             AttendanceSession.teacher_id == teacher_id,
             AttendanceSession.session_date == today_date,
-            AttendanceSession.school_id == get_current_school_id(),
+            AttendanceSession.school_id == sid,
         ).first()
         if not s:
             return None
@@ -608,6 +602,7 @@ def get_teachers_paginated(page: int = 1, per_page: int = 5):
             TeacherDTO(
                 id=t.id, telegram_id=t.telegram_id, name=t.name,
                 role=t.role, is_active=t.is_active,
+                school_id=t.school_id,
                 class_id=t.class_id,
                 class_name=t.class_.name if t.class_ else None,
                 school_name=t.school.name if t.school else None
@@ -643,10 +638,12 @@ def get_class_teacher_for_class(class_id: int) -> TeacherDTO | None:
         return TeacherDTO(
             id=t.id, telegram_id=t.telegram_id, name=t.name,
             role=t.role, is_active=t.is_active,
+            school_id=t.school_id,
             class_id=t.class_id,
             class_name=t.class_.name if t.class_ else None,
             school_name=t.school.name if t.school else None
         )
+
 
 def has_pending_request(telegram_id: int, school_id: int) -> bool:
     """Возвращает True, если у пользователя уже есть необработанная заявка в данной школе."""
