@@ -16,7 +16,7 @@ class RegistrationStates(StatesGroup):
     waiting_name = State()
     waiting_surname = State()
     choosing_role = State()
-    choosing_school = State()       # ← новое состояние
+    choosing_school = State()
     choosing_class = State()
 
 
@@ -47,8 +47,6 @@ async def process_surname(message: Message, state: FSMContext) -> None:
         await message.answer("Фамилия не может быть пустой. Введите фамилию:")
         return
     await state.update_data(surname=surname)
-
-    # Показываем выбор роли
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="👨‍🏫 Классный руководитель", callback_data="reg:role:class_teacher")],
         [InlineKeyboardButton(text="🧑‍🏫 Учитель-предметник", callback_data="reg:role:subject_teacher")],
@@ -63,34 +61,32 @@ async def role_chosen(callback: CallbackQuery, state: FSMContext) -> None:
     role = callback.data.split(":")[-1]
     await state.update_data(role=role)
 
-    # Проверяем количество школ
     schools = get_all_schools()
     if len(schools) > 1:
-        # Если школ несколько — предлагаем выбрать
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=s['name'], callback_data=f"reg:school:{s['id']}:{s['name']}")]
+            # Передаём только id — имя не кладём в callback_data во избежание проблем с ":"
+            [InlineKeyboardButton(text=s["name"], callback_data=f"reg:school:{s['id']}")]
             for s in schools
         ])
         await state.set_state(RegistrationStates.choosing_school)
         await callback.message.edit_text("Выберите вашу школу:", reply_markup=kb)
     else:
-        # Школа одна — запоминаем её id и переходим к следующему шагу
-        school_id = schools[0]['id'] if schools else 1
+        school_id = schools[0]["id"] if schools else 1
         await state.update_data(school_id=school_id)
         await _proceed_after_school(callback, state, role)
+    await callback.answer()
 
 
 async def _proceed_after_school(callback: CallbackQuery, state: FSMContext, role: str) -> None:
-    """Действия после определения школы (или если она единственная)."""
     if role == Role.CLASS_TEACHER:
         classes = get_all_classes()
         if not classes:
             await callback.message.edit_text("Нет доступных классов. Обратитесь к администратору.")
             await state.clear()
-            await callback.answer()
             return
         kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=c.name, callback_data=f"reg:class:{c.id}:{c.name}")]
+            # Передаём только id — имя не кладём в callback_data
+            [InlineKeyboardButton(text=c.name, callback_data=f"reg:class:{c.id}")]
             for c in classes
         ])
         await state.set_state(RegistrationStates.choosing_class)
@@ -98,67 +94,81 @@ async def _proceed_after_school(callback: CallbackQuery, state: FSMContext, role
     else:
         data = await state.get_data()
         school_id = data.get("school_id", 1)
-        await _save_and_notify(callback.from_user.id, state, callback.bot, class_name=None, school_id=school_id)
+        await _save_and_notify(callback.from_user.id, state, callback.bot, class_id=None, school_id=school_id)
         await callback.message.edit_text(
             "✅ Заявка отправлена администратору. Ожидайте подтверждения.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="nav:menu")]
-            ])
+            ]),
         )
         await state.clear()
-    await callback.answer()
 
 
 @registration_router.callback_query(RegistrationStates.choosing_school, F.data.startswith("reg:school:"))
 async def school_chosen(callback: CallbackQuery, state: FSMContext) -> None:
-    parts = callback.data.split(":")
-    school_id = int(parts[2])
-    # school_name = parts[3]  # не понадобится, т.к. у нас есть id
+    school_id = int(callback.data.split(":")[-1])
     await state.update_data(school_id=school_id)
-
     data = await state.get_data()
     role = data.get("role", Role.SUBJECT_TEACHER)
     await _proceed_after_school(callback, state, role)
+    await callback.answer()
 
 
 @registration_router.callback_query(RegistrationStates.choosing_class, F.data.startswith("reg:class:"))
 async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
-    parts = callback.data.split(":")
-    class_name = parts[-1]
+    class_id = int(callback.data.split(":")[-1])
     data = await state.get_data()
     school_id = data.get("school_id", 1)
-    await _save_and_notify(callback.from_user.id, state, callback.bot, class_name=class_name, school_id=school_id)
+    await _save_and_notify(callback.from_user.id, state, callback.bot, class_id=class_id, school_id=school_id)
     await callback.message.edit_text(
         "✅ Заявка отправлена администратору. Ожидайте подтверждения.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="nav:menu")]
-        ])
+        ]),
     )
     await state.clear()
     await callback.answer()
 
 
-async def _save_and_notify(user_id: int, state: FSMContext, bot: Bot, class_name: str | None, school_id: int) -> None:
+async def _save_and_notify(
+    user_id: int,
+    state: FSMContext,
+    bot: Bot,
+    class_id: int | None,
+    school_id: int,
+) -> None:
+    from database import Class as ClassModel
     data = await state.get_data()
     name = f"{data.get('name', '')} {data.get('surname', '')}".strip()
     role = data.get("role", Role.SUBJECT_TEACHER)
 
-    # Получаем название школы для уведомления
+    # Получаем имя класса по id для уведомления и хранения в заявке
+    class_name: str | None = None
+    if class_id is not None:
+        db = SessionLocal()
+        try:
+            c = db.query(ClassModel).filter(ClassModel.id == class_id).first()
+            class_name = c.name if c else None
+        finally:
+            db.close()
+
     schools = get_all_schools()
-    school_name = next((s['name'] for s in schools if s['id'] == school_id), "Неизвестная школа")
+    school_name = next((s["name"] for s in schools if s["id"] == school_id), "Неизвестная школа")
 
     db = SessionLocal()
-    req = RegistrationRequest(
-        telegram_id=user_id,
-        name=name,
-        role=role,
-        class_name=class_name,
-        status="pending",
-        school_id=school_id,          # ← теперь заполняем школу
-    )
-    db.add(req)
-    db.commit()
-    db.close()
+    try:
+        req = RegistrationRequest(
+            telegram_id=user_id,
+            name=name,
+            role=role,
+            class_name=class_name,
+            status="pending",
+            school_id=school_id,
+        )
+        db.add(req)
+        db.commit()
+    finally:
+        db.close()
 
     text = (
         f"📩 Новая заявка на доступ!\n"
@@ -167,6 +177,6 @@ async def _save_and_notify(user_id: int, state: FSMContext, bot: Bot, class_name
         f"Роль: {ROLE_LABELS.get(role, role)}\n"
         f"Класс: {class_name or 'не выбран'}\n"
         f"🏫 Школа: {school_name}\n\n"
-        f"Одобрите или отклоните в веб-панели."
+        f"Одобрите или отклоните в меню администратора."
     )
     await bot.send_message(ADMIN_TELEGRAM_ID, text)

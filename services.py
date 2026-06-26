@@ -4,8 +4,9 @@ from aiogram import Bot
 from repositories import (
     get_teacher_by_telegram_id, get_available_classes, get_students_by_class,
     create_session, add_records, toggle_student_presence, finish_session,
-    get_active_sessions, get_sessions_for_report, CreatedSession, SessionAlreadyExists,
-    delete_session as repo_delete_session, get_db as repo_get_db,
+    get_active_sessions, get_sessions_for_report,
+    CreatedSession, SessionAlreadyExists,
+    delete_session as repo_delete_session,
 )
 from config import ADMIN_TELEGRAM_ID
 from core.school_context import get_current_school_id
@@ -19,14 +20,14 @@ class AttendanceService:
         if not teacher:
             return None, "Вы не зарегистрированы. Обратитесь к администратору."
 
-        # Для обычного учителя проверяем, что класс свободен
         if not is_admin_user and class_id not in {c.id for c in get_available_classes(date.today())}:
             return None, "Этот класс уже занят или недоступен."
 
-        # Администратор может перезаписывать существующую сессию
         if is_admin_user:
-            from database import AttendanceSession
-            with repo_get_db() as db:
+            # Удаляем существующую сессию через репозиторий (без вложенного get_db)
+            from database import SessionLocal, AttendanceSession
+            db = SessionLocal()
+            try:
                 old = db.query(AttendanceSession).filter(
                     AttendanceSession.class_id == class_id,
                     AttendanceSession.session_date == date.today(),
@@ -34,7 +35,9 @@ class AttendanceService:
                 ).first()
                 if old:
                     db.delete(old)
-                    db.flush()
+                    db.commit()
+            finally:
+                db.close()
 
         try:
             session = create_session(teacher.id, class_id)
