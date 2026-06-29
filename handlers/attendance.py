@@ -13,6 +13,7 @@ from repositories import (
 )
 from core.keyboards import BTN_START_ROLL, build_menu_keyboard
 from core.roles import check_access, Role, is_admin
+from core.school_context import get_school_id_for_admin
 from helpers.session_card import get_today_session_card
 
 attendance_router = Router()
@@ -41,10 +42,13 @@ async def start_attendance(message: Message, state: FSMContext) -> None:
             await message.answer(card)
             return
 
-    # Для обычного учителя используем его школу, для админа — глобальный контекст
-    school_id = teacher.school_id if not is_admin(message.from_user.id) else None
-    available = get_available_classes(date.today(), school_id=school_id,
-                                      is_admin_user=is_admin(message.from_user.id))
+    # Определяем школу
+    if is_admin(message.from_user.id):
+        school_id = get_school_id_for_admin(message.from_user.id)
+    else:
+        school_id = teacher.school_id
+
+    available = get_available_classes(date.today(), school_id=school_id)
     if not available:
         await message.answer("Все классы уже отмечены на сегодня.")
         return
@@ -99,10 +103,10 @@ async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
     class_id = int(class_id_str)
     school_id = int(school_id_str)
 
+    # Запуск переклички (без флага is_admin_user)
     session, result = AttendanceService.start_attendance(
         callback.from_user.id, class_id,
-        is_admin_user=is_admin(callback.from_user.id),
-        teacher_school_id=school_id
+        teacher_school_id=school_id,
     )
 
     if session is None:
@@ -115,7 +119,6 @@ async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer()
         return
 
-    # Сохраняем school_id в состоянии, чтобы использовать его при переключении учеников
     await state.update_data(session_id=session.id, class_id=class_id, school_id=school_id)
     students = get_students_by_class(class_id, school_id=school_id)
     kb = _build_marking_keyboard(students, session.id, [])
@@ -140,7 +143,7 @@ async def toggle_student(callback: CallbackQuery, state: FSMContext) -> None:
     student_id = int(parts[3])
     AttendanceService.toggle_student(session_id, student_id)
     data = await state.get_data()
-    school_id = data.get("school_id")      # берём сохранённый school_id
+    school_id = data.get("school_id")
     students = get_students_by_class(data["class_id"], school_id=school_id)
     records = get_session_records(session_id)
     kb = _build_marking_keyboard(students, session_id, records)

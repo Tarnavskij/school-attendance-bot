@@ -214,21 +214,27 @@ def get_all_classes(school_id: int | None = None) -> list[ClassDTO]:
                 .order_by(Class.grade, Class.letter).all()]
 
 
-def get_available_classes(today_date: date, school_id: int | None = None, is_admin_user: bool = False) -> list[ClassDTO]:
+def get_available_classes(today_date: date, school_id: int | None = None) -> list[ClassDTO]:
+    """Возвращает классы, в которых сегодня ещё НЕ проводилась перекличка (любой статус)."""
     sid = school_id if school_id is not None else get_current_school_id()
-    if is_admin_user:
-        with get_db() as db:
-            return [ClassDTO(id=c.id, name=c.name, school_id=c.school_id, grade=c.grade, letter=c.letter)
-                    for c in db.query(Class).filter(Class.school_id == sid)
-                    .order_by(Class.grade, Class.letter).all()]
     with get_db() as db:
-        taken_ids = (db.query(AttendanceSession.class_id)
-                     .filter(AttendanceSession.session_date == today_date,
-                             AttendanceSession.school_id == sid))
-        return [ClassDTO(id=c.id, name=c.name, school_id=c.school_id, grade=c.grade, letter=c.letter)
-                for c in db.query(Class).filter(Class.school_id == sid,
-                                                ~Class.id.in_(taken_ids))
-                .order_by(Class.grade, Class.letter).all()]
+        taken_ids = (
+            db.query(AttendanceSession.class_id)
+            .filter(
+                AttendanceSession.session_date == today_date,
+                AttendanceSession.school_id == sid,
+            )
+        )
+        return [
+            ClassDTO(id=c.id, name=c.name, school_id=c.school_id, grade=c.grade, letter=c.letter)
+            for c in db.query(Class)
+            .filter(
+                Class.school_id == sid,
+                ~Class.id.in_(taken_ids),
+            )
+            .order_by(Class.grade, Class.letter)
+            .all()
+        ]
 
 
 def get_students_by_class(class_id: int, school_id: int | None = None) -> list[StudentDTO]:
@@ -653,3 +659,19 @@ def has_pending_request(telegram_id: int, school_id: int) -> bool:
             RegistrationRequest.school_id == school_id,
             RegistrationRequest.status == "pending",
         ).first() is not None
+
+def ensure_admin_teacher(telegram_id: int, school_id: int) -> None:
+    """Создаёт запись Teacher для администратора в указанной школе, если её нет."""
+    with get_db() as db:
+        existing = db.query(Teacher).filter(
+            Teacher.telegram_id == telegram_id,
+            Teacher.school_id == school_id,
+        ).first()
+        if not existing:
+            db.add(Teacher(
+                telegram_id=telegram_id,
+                name="Администратор",
+                role="admin",
+                school_id=school_id,
+                is_active=True,
+            ))

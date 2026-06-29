@@ -5,7 +5,7 @@ from repositories import (
     get_teacher_by_telegram_id, get_available_classes, get_students_by_class,
     create_session, add_records, toggle_student_presence, finish_session,
     get_active_sessions, get_sessions_for_report, CreatedSession, SessionAlreadyExists,
-    delete_session as repo_delete_session, get_db as repo_get_db,
+    # удалены: delete_session, get_db
 )
 from config import ADMIN_TELEGRAM_ID
 from core.school_context import get_current_school_id
@@ -14,7 +14,7 @@ from core.school_context import get_current_school_id
 class AttendanceService:
 
     @staticmethod
-    def start_attendance(telegram_id: int, class_id: int, is_admin_user: bool = False,
+    def start_attendance(telegram_id: int, class_id: int,
                          teacher_school_id: int | None = None):
         teacher = get_teacher_by_telegram_id(telegram_id)
         if not teacher:
@@ -22,20 +22,9 @@ class AttendanceService:
 
         school_id = teacher_school_id if teacher_school_id is not None else get_current_school_id()
 
-        if not is_admin_user and class_id not in {c.id for c in get_available_classes(date.today(), school_id=school_id)}:
+        # Единая проверка для всех – класс доступен, если на сегодня нет сессии
+        if class_id not in {c.id for c in get_available_classes(date.today(), school_id=school_id)}:
             return None, "Этот класс уже занят или недоступен."
-
-        if is_admin_user:
-            from database import AttendanceSession
-            with repo_get_db() as db:
-                old = db.query(AttendanceSession).filter(
-                    AttendanceSession.class_id == class_id,
-                    AttendanceSession.session_date == date.today(),
-                    AttendanceSession.school_id == get_current_school_id(),
-                ).first()
-                if old:
-                    db.delete(old)
-                    db.flush()
 
         try:
             session = create_session(teacher.id, class_id, school_id=school_id)
