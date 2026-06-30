@@ -20,3 +20,4 @@ DEFAULT_SCHOOL_ID: int = 1
 WEB_USERNAME: str = os.getenv("WEB_USERNAME", "admin")
 WEB_PASSWORD: str = _require("WEB_PASSWORD")
 FLASK_SECRET_KEY: str = _require("FLASK_SECRET_KEY")
+SSE_PUBLISH_TOKEN: str = _require("SSE_PUBLISH_TOKEN")

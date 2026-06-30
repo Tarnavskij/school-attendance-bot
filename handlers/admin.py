@@ -285,8 +285,10 @@ async def approve_request_handler(callback: CallbackQuery) -> None:
         await callback.answer("✅ Заявка одобрена, пользователь добавлен.")
     else:
         await callback.answer("❌ Не удалось одобрить. Пользователь уже активен в этой школе.")
-    await show_requests(callback)
-
+    # Оповещаем веб-панель
+    notify = getattr(callback.bot, "notify_web", None)
+    if notify:
+        await notify("requests_update")
 
 @admin_router.callback_query(F.data.startswith("admin:reject:"))
 async def reject_request_handler(callback: CallbackQuery) -> None:
@@ -295,9 +297,10 @@ async def reject_request_handler(callback: CallbackQuery) -> None:
     req_id = int(callback.data.split(":")[-1])
     reject_request(req_id)
     await callback.answer("Заявка отклонена.")
-    await show_requests(callback)
-
-
+    # Оповещаем веб-панель
+    notify = getattr(callback.bot, "notify_web", None)
+    if notify:
+        await notify("requests_update")
 # ===== Карточка учителя =====
 
 @admin_router.callback_query(F.data.startswith("admin:teacher:"))

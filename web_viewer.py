@@ -1,19 +1,35 @@
 # web_viewer.py
 import io
 import functools
+import json
+import queue
+import uuid
+from datetime import date
 from flask import (
     Flask, render_template_string, request, send_file,
-    redirect, url_for, session, Response,
+    redirect, url_for, session, Response, jsonify,
 )
 from markupsafe import escape
 from sqlalchemy.orm import joinedload
-from sqlalchemy import func
 from database import SessionLocal, AttendanceSession, AttendanceRecord, RegistrationRequest, Teacher, Class
-from config import DEFAULT_SCHOOL_ID, WEB_USERNAME, WEB_PASSWORD, FLASK_SECRET_KEY
+from config import DEFAULT_SCHOOL_ID, WEB_USERNAME, WEB_PASSWORD, FLASK_SECRET_KEY, SSE_PUBLISH_TOKEN
 from import_students import import_from_excel
+import threading
 
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
+
+# ── SSE subscribers ───────────────────────────────────────────────────────────
+subscribers: list[queue.Queue] = []
+subscribers_lock = threading.Lock()
+
+
+def _notify_subscribers(event: str, data: dict | None = None) -> None:
+    """Посылает событие всем текущим SSE‑подписчикам."""
+    payload = f"event: {event}\ndata: {json.dumps(data or {})}\n\n"
+    with subscribers_lock:
+        for q in subscribers:
+            q.put(payload)
 
 
 # ── HTTP Basic Auth ───────────────────────────────────────────────────────────
@@ -36,9 +52,9 @@ def require_auth(f):
     return decorated
 
 
-# ── Шаблон ────────────────────────────────────────────────────────────────────
+# ── HTML шаблон (с добавленными скриптами) ───────────────────────────────────
 
-TEMPLATE = """<!DOCTYPE html>
+TEMPLATE = r"""<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="utf-8">
@@ -185,14 +201,16 @@ TEMPLATE = """<!DOCTYPE html>
       <a href="/download_excel?date={{ date }}" class="btn btn-primary">📥 Excel</a>
     </div>
   </div>
-  {% if stats %}
-  <div class="stats">
-    <div class="stat-card"><div class="stat-number">{{ stats.total }}</div><div class="stat-label">Перекличек</div></div>
-    <div class="stat-card"><div class="stat-number">{{ stats.absent }}</div><div class="stat-label">Отсутствуют</div></div>
-    <div class="stat-card"><div class="stat-number">{{ stats.classes }}</div><div class="stat-label">Классов</div></div>
+  <div id="stats-block">
+    {% if stats %}
+    <div class="stats">
+      <div class="stat-card"><div class="stat-number">{{ stats.total }}</div><div class="stat-label">Перекличек</div></div>
+      <div class="stat-card"><div class="stat-number">{{ stats.absent }}</div><div class="stat-label">Отсутствуют</div></div>
+      <div class="stat-card"><div class="stat-number">{{ stats.classes }}</div><div class="stat-label">Классов</div></div>
+    </div>
+    {% endif %}
   </div>
-  {% endif %}
-  <div class="glass">
+  <div class="glass" id="summary-table-container">
     {% if data %}
     <table>
       <tr><th>Учитель</th><th>Класс</th><th>Отсутствуют (причина)</th><th>Время</th></tr>
@@ -209,10 +227,52 @@ TEMPLATE = """<!DOCTYPE html>
     <div class="empty">Нет данных за эту дату</div>
     {% endif %}
   </div>
+  <script>
+    const summarySource = new EventSource('/stream?token={{ sse_token }}');
+    summarySource.addEventListener('summary_update', async (e) => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const dateStr = params.get('date') || new Date().toISOString().slice(0,10);
+        const resp = await fetch(`/api/summary?date=${dateStr}`);
+        const json = await resp.json();
+        updateSummary(json);
+      } catch(err) {
+        console.error('Не удалось обновить сводку', err);
+      }
+    });
+    function updateSummary(json) {
+      const statsContainer = document.getElementById('stats-block');
+      const tableContainer = document.getElementById('summary-table-container');
+      if (json.stats) {
+        statsContainer.innerHTML = `
+          <div class="stats">
+            <div class="stat-card"><div class="stat-number">${json.stats.total}</div><div class="stat-label">Перекличек</div></div>
+            <div class="stat-card"><div class="stat-number">${json.stats.absent}</div><div class="stat-label">Отсутствуют</div></div>
+            <div class="stat-card"><div class="stat-number">${json.stats.classes}</div><div class="stat-label">Классов</div></div>
+          </div>`;
+      } else {
+        statsContainer.innerHTML = '';
+      }
+      if (json.data && json.data.length > 0) {
+        let rows = json.data.map(row => `<tr>
+          <td>${row.teacher}</td>
+          <td>${row.class}</td>
+          <td style="white-space:pre-line">${row.absent}</td>
+          <td style="color:rgba(255,255,255,0.4)">${row.time}</td>
+        </tr>`).join('');
+        tableContainer.innerHTML = `<table>
+          <tr><th>Учитель</th><th>Класс</th><th>Отсутствуют (причина)</th><th>Время</th></tr>
+          ${rows}
+        </table>`;
+      } else {
+        tableContainer.innerHTML = '<div class="empty">Нет данных за эту дату</div>';
+      }
+    }
+  </script>
 
 {% elif page == 'requests' %}
   <div class="page-title">📩 Заявки на доступ</div>
-  <div class="glass">
+  <div class="glass" id="requests-table-container">
     {% if requests %}
     <table>
       <tr><th>Имя</th><th>Telegram ID</th><th>Роль</th><th>Класс</th><th>Статус</th><th>Действия</th></tr>
@@ -259,6 +319,67 @@ TEMPLATE = """<!DOCTYPE html>
     <div class="empty">Новых заявок нет</div>
     {% endif %}
   </div>
+  <script>
+    const reqSource = new EventSource('/stream?token={{ sse_token }}');
+    reqSource.addEventListener('requests_update', async () => {
+      try {
+        const resp = await fetch('/api/requests');
+        const json = await resp.json();
+        updateRequests(json);
+      } catch(err) {
+        console.error('Не удалось обновить заявки', err);
+      }
+    });
+    function updateRequests(requests) {
+      const container = document.getElementById('requests-table-container');
+      if (!requests || requests.length === 0) {
+        container.innerHTML = '<div class="empty">Новых заявок нет</div>';
+        return;
+      }
+      let rows = requests.map(r => {
+        let statusHtml = '';
+        if (r.status === 'pending' && r.already_exists) {
+          statusHtml = '<span class="badge badge-already">⚠️ Уже в системе</span>';
+        } else if (r.status === 'pending') {
+          statusHtml = '<span class="badge badge-pending">⏳ Ожидает</span>';
+        } else if (r.status === 'approved') {
+          statusHtml = '<span class="badge badge-approved">✅ Одобрена</span>';
+        } else {
+          statusHtml = '<span class="badge badge-rejected">❌ Отклонена</span>';
+        }
+        let actionsHtml = '';
+        if (r.status === 'pending') {
+          if (r.already_exists) {
+            actionsHtml = `<span style="color:rgba(255,255,255,0.3);font-size:13px">Уже существует</span>
+              <form method="post" action="/requests/${r.id}/reject" style="display:inline;margin-left:6px">
+                <button type="submit" class="btn btn-danger btn-sm">❌ Отклонить</button>
+              </form>`;
+          } else {
+            actionsHtml = `<form method="post" action="/requests/${r.id}/approve" style="display:inline">
+                <button type="submit" class="btn btn-success btn-sm">✅ Одобрить</button>
+              </form>
+              <form method="post" action="/requests/${r.id}/reject" style="display:inline;margin-left:6px">
+                <button type="submit" class="btn btn-danger btn-sm">❌ Отклонить</button>
+              </form>`;
+          }
+        } else {
+          actionsHtml = '<span style="color:rgba(255,255,255,0.25);font-size:13px">Обработана</span>';
+        }
+        return `<tr>
+          <td><b>${r.name}</b></td>
+          <td style="color:rgba(255,255,255,0.5);font-family:monospace">${r.telegram_id}</td>
+          <td>${r.role_label}</td>
+          <td>${r.class_name || '—'}</td>
+          <td>${statusHtml}</td>
+          <td>${actionsHtml}</td>
+        </tr>`;
+      }).join('');
+      container.innerHTML = `<table>
+        <tr><th>Имя</th><th>Telegram ID</th><th>Роль</th><th>Класс</th><th>Статус</th><th>Действия</th></tr>
+        ${rows}
+      </table>`;
+    }
+  </script>
 
 {% elif page == 'schools' %}
   <div class="page-title">🏫 Управление школами</div>
@@ -330,7 +451,6 @@ def _pending_count(school_id: int) -> int:
 
 
 def _load_sessions(date_str: str, school_id: int) -> list:
-    """Загружает сессии по session_date. Возвращает только отсутствующих."""
     db = SessionLocal()
     try:
         sessions = (
@@ -353,7 +473,6 @@ def _load_sessions(date_str: str, school_id: int) -> list:
                 "teacher": s.teacher.name if s.teacher else "?",
                 "class": s.class_.name if s.class_ else "?",
                 "end_time": s.end_time,
-                # список только отсутствующих: (name, reason)
                 "absent": [
                     (r.student.name, r.reason)
                     for r in s.records
@@ -366,51 +485,126 @@ def _load_sessions(date_str: str, school_id: int) -> list:
         db.close()
 
 
-@app.route("/switch_school")
-@require_auth
-def switch_school():
-    school_id = request.args.get("school_id", DEFAULT_SCHOOL_ID, type=int)
-    session["school_id"] = school_id
-    return redirect(request.referrer or url_for("index"))
+def _generate_sse_token() -> str:
+    """Генерирует случайный токен для SSE, сохраняет в сессию."""
+    if 'sse_token' not in session:
+        session['sse_token'] = uuid.uuid4().hex
+    return session['sse_token']
 
 
-@app.route("/")
+# ── JSON API ─────────────────────────────────────────────────────────────────
+
+@app.route("/api/summary")
 @require_auth
-def index():
-    from datetime import date
+def api_summary():
     school_id = get_web_school_id()
     date_str = request.args.get("date", date.today().strftime("%Y-%m-%d"))
     raw_sessions = _load_sessions(date_str, school_id)
-
     rows = []
     for s in raw_sessions:
-        absent_entries = s["absent"]  # уже только отсутствующие
+        absent_entries = s["absent"]
         if absent_entries:
             absent_text = "\n".join(
                 f"{escape(name)} — {escape(reason or '—')}" for name, reason in absent_entries
             )
         else:
             absent_text = "нет"
-
         rows.append({
             "teacher": escape(s["teacher"]),
             "class": escape(s["class"]),
             "absent": absent_text,
             "time": s["end_time"].strftime("%H:%M") if s["end_time"] else "",
         })
-
     stats = {
         "total": len(raw_sessions),
         "absent": sum(len(s["absent"]) for s in raw_sessions),
         "classes": len({s["class_id"] for s in raw_sessions}),
     } if raw_sessions else None
+    return jsonify({"data": rows, "stats": stats})
 
+
+@app.route("/api/requests")
+@require_auth
+def api_requests():
+    from core.roles import ROLE_LABELS
+    school_id = get_web_school_id()
+    db = SessionLocal()
+    try:
+        reqs = (
+            db.query(RegistrationRequest)
+            .filter(RegistrationRequest.school_id == school_id)
+            .order_by(RegistrationRequest.created_at.desc())
+            .all()
+        )
+        active_teacher_ids = {
+            row[0]
+            for row in db.query(Teacher.telegram_id).filter(
+                Teacher.school_id == school_id,
+                Teacher.is_active == True,
+            ).all()
+        }
+        result = [
+            {
+                "id": r.id,
+                "name": r.name,
+                "telegram_id": r.telegram_id,
+                "role_label": ROLE_LABELS.get(r.role, r.role),
+                "class_name": r.class_name,
+                "status": r.status,
+                "already_exists": r.telegram_id in active_teacher_ids,
+            }
+            for r in reqs
+        ]
+    finally:
+        db.close()
+    return jsonify(result)
+
+
+# ── Обычные страницы ─────────────────────────────────────────────────────────
+
+@app.route("/switch_school")
+@require_auth
+def switch_school():
+    school_id = request.args.get("school_id", DEFAULT_SCHOOL_ID, type=int)
+    session["school_id"] = school_id
+    _notify_subscribers("school_switch", {"school_id": school_id})
+    return redirect(request.referrer or url_for("index"))
+
+
+@app.route("/")
+@require_auth
+def index():
+    school_id = get_web_school_id()
+    date_str = request.args.get("date", date.today().strftime("%Y-%m-%d"))
+    raw_sessions = _load_sessions(date_str, school_id)
+    rows = []
+    for s in raw_sessions:
+        absent_entries = s["absent"]
+        if absent_entries:
+            absent_text = "\n".join(
+                f"{escape(name)} — {escape(reason or '—')}" for name, reason in absent_entries
+            )
+        else:
+            absent_text = "нет"
+        rows.append({
+            "teacher": escape(s["teacher"]),
+            "class": escape(s["class"]),
+            "absent": absent_text,
+            "time": s["end_time"].strftime("%H:%M") if s["end_time"] else "",
+        })
+    stats = {
+        "total": len(raw_sessions),
+        "absent": sum(len(s["absent"]) for s in raw_sessions),
+        "classes": len({s["class_id"] for s in raw_sessions}),
+    } if raw_sessions else None
+    sse_token = _generate_sse_token()
     return render_template_string(
         TEMPLATE, page="summary", data=rows,
         date=date_str, stats=stats,
         pending_count=_pending_count(school_id),
         all_schools=get_all_schools_data(),
         current_school_id=school_id,
+        sse_token=sse_token,
     )
 
 
@@ -448,12 +642,13 @@ def requests_page():
         ]
     finally:
         db.close()
-
+    sse_token = _generate_sse_token()
     return render_template_string(
         TEMPLATE, page="requests", requests=result,
         pending_count=_pending_count(school_id),
         all_schools=get_all_schools_data(),
         current_school_id=school_id,
+        sse_token=sse_token,
     )
 
 
@@ -464,7 +659,9 @@ def approve_request_web(req_id: int):
     school_id = get_web_school_id()
     set_current_school_id(school_id)
     from repositories import approve_request
-    approve_request(req_id)
+    success = approve_request(req_id)
+    if success:
+        _notify_subscribers("requests_update")
     return redirect(url_for("requests_page"))
 
 
@@ -476,6 +673,7 @@ def reject_request_web(req_id: int):
     set_current_school_id(school_id)
     from repositories import reject_request
     reject_request(req_id)
+    _notify_subscribers("requests_update")
     return redirect(url_for("requests_page"))
 
 
@@ -498,6 +696,7 @@ def create_school_route():
     if name:
         from repositories import create_school
         create_school(name)
+        _notify_subscribers("schools_update")
     return redirect(url_for("schools_page"))
 
 
@@ -546,7 +745,6 @@ def import_students_route(school_id: int):
 def download_excel():
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment
-    from datetime import date
     school_id = get_web_school_id()
     date_str = request.args.get("date", date.today().strftime("%Y-%m-%d"))
     raw_sessions = _load_sessions(date_str, school_id)
@@ -581,6 +779,53 @@ def download_excel():
         as_attachment=True,
         download_name=f"attendance_{date_str}.xlsx",
     )
+
+
+# ── SSE и внутренний publish ──────────────────────────────────────────────────
+
+@app.route("/stream")
+def stream():
+    """SSE endpoint для браузера с проверкой токена из сессии."""
+    token = request.args.get("token")
+    if not token or token != session.get("sse_token"):
+        return Response("Unauthorized", status=403)
+
+    def event_stream():
+        q: queue.Queue = queue.Queue()
+        with subscribers_lock:
+            subscribers.append(q)
+        try:
+            while True:
+                try:
+                    msg = q.get(timeout=30)
+                    yield msg
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+        finally:
+            with subscribers_lock:
+                subscribers.remove(q)
+
+    return Response(
+        event_stream(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+@app.route("/_publish", methods=["POST"])
+def internal_publish():
+    """Только для бота: получает событие и рассылает SSE-клиентам."""
+    token = request.headers.get("X-SSE-Token") or request.args.get("token")
+    if token != SSE_PUBLISH_TOKEN:
+        return jsonify({"error": "unauthorized"}), 403
+
+    payload = request.get_json(silent=True) or {}
+    event = payload.get("event", "update")
+    data = payload.get("data", {})
+    _notify_subscribers(event, data)
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":

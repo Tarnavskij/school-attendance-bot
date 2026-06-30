@@ -60,8 +60,6 @@ async def start_attendance(message: Message, state: FSMContext) -> None:
 
 
 def _build_class_keyboard(available_classes) -> InlineKeyboardMarkup:
-    """Группирует классы по параллелям (grade) и выводит кнопки рядами.
-    В callback_data теперь передаётся school_id для однозначной идентификации школы класса."""
     groups: dict[int, list] = {}
     for c in available_classes:
         grade = c.grade or 0
@@ -103,7 +101,6 @@ async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
     class_id = int(class_id_str)
     school_id = int(school_id_str)
 
-    # Запуск переклички (без флага is_admin_user)
     session, result = AttendanceService.start_attendance(
         callback.from_user.id, class_id,
         teacher_school_id=school_id,
@@ -198,6 +195,10 @@ async def submit_attendance(callback: CallbackQuery, state: FSMContext) -> None:
                 pass
     else:
         card_text = "✅ Перекличка завершена."
+
+    notify = getattr(callback.bot, "notify_web", None)
+    if notify:
+        await notify("summary_update")
 
     await callback.message.edit_text(card_text, reply_markup=None)
     await callback.message.answer(
