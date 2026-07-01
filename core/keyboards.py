@@ -8,13 +8,14 @@ from repositories import get_teacher_by_telegram_id
 BTN_MENU = "📋 Меню"
 BTN_START_ROLL = "🧑‍🏫 Начать перекличку"
 BTN_MY_CLASS = "👨‍🏫 Мой класс"
+BTN_MEAL = "🍽️ Питание"
 BTN_SCHOOL_SUMMARY = "📊 Сводка по школе"
 BTN_TEACHER_LIST = "👥 Пользователи"
 BTN_STUDENTS = "🎓 Ученики"
 BTN_REQUEST_ACCESS = "🚪 Получить доступ"
 BTN_DIRECTOR_CLASSES = "🏫 Классы"
 BTN_ROLL_STATUS = "📋 Статус переклички"
-BTN_SCHOOLS = "🏫 Школы"                          # ← новая кнопка
+BTN_SCHOOLS = "🏫 Школы"
 
 # ── Reply keyboards ───────────────────────────────────────────────────────────
 
@@ -34,7 +35,7 @@ def build_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         rows = [
             [KeyboardButton(text=BTN_START_ROLL), KeyboardButton(text=BTN_MY_CLASS)],
             [KeyboardButton(text=BTN_SCHOOL_SUMMARY), KeyboardButton(text=BTN_TEACHER_LIST)],
-            [KeyboardButton(text=BTN_STUDENTS), KeyboardButton(text=BTN_SCHOOLS)],  # ← добавлено
+            [KeyboardButton(text=BTN_STUDENTS), KeyboardButton(text=BTN_SCHOOLS)],
         ]
         return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
@@ -48,7 +49,10 @@ def build_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     elif role == Role.SUBJECT_TEACHER:
         rows = [[KeyboardButton(text=BTN_START_ROLL)]]
     elif role == Role.CLASS_TEACHER:
-        rows = [[KeyboardButton(text=BTN_START_ROLL), KeyboardButton(text=BTN_MY_CLASS)]]
+        rows = [
+            [KeyboardButton(text=BTN_START_ROLL), KeyboardButton(text=BTN_MY_CLASS)],
+            [KeyboardButton(text=BTN_MEAL)],  # ← кнопка питания
+        ]
     elif role == Role.SECRETARY:
         rows = [[KeyboardButton(text=BTN_ROLL_STATUS)]]
     else:

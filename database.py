@@ -49,6 +49,7 @@ class Teacher(Base):
         back_populates="teacher",
         foreign_keys="AttendanceSession.teacher_id",
     )
+    meal_requests = relationship("MealRequest", back_populates="submitted_by", cascade="all, delete-orphan")
 
 
 class Class(Base):
@@ -67,6 +68,7 @@ class Class(Base):
     sessions = relationship("AttendanceSession", back_populates="class_")
     teacher = relationship("Teacher", back_populates="class_", uselist=False)
     school = relationship("School", back_populates="classes")
+    meal_requests = relationship("MealRequest", back_populates="class_", cascade="all, delete-orphan")
 
 
 class Student(Base):
@@ -76,10 +78,12 @@ class Student(Base):
     name = Column(String(255), nullable=False)
     class_id = Column(Integer, ForeignKey("classes.id", ondelete="CASCADE"), nullable=False, index=True)
     school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, default=1)
+    meal_type = Column(String(10), default="paid", nullable=False)  # "paid" или "free"
 
     class_ = relationship("Class", back_populates="students")
     school = relationship("School", back_populates="students")
     records = relationship("AttendanceRecord", back_populates="student", cascade="all, delete-orphan")
+    meal_items = relationship("MealRequestItem", back_populates="student", cascade="all, delete-orphan")
 
 
 class AttendanceSession(Base):
@@ -129,10 +133,6 @@ class AttendanceRecord(Base):
 class RegistrationRequest(Base):
     __tablename__ = "registration_requests"
     __table_args__ = (
-        # Быстрый поиск pending-заявок по пользователю и школе.
-        # Уникальность «один pending на пользователя в школе» обеспечивается кодом,
-        # а не constraint-ом, потому что SQLite не поддерживает partial unique index
-        # через стандартный DDL SQLAlchemy.
         Index("ix_reg_req_telegram_school_status", "telegram_id", "school_id", "status"),
     )
 
@@ -146,3 +146,36 @@ class RegistrationRequest(Base):
     school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, default=1)
 
     school = relationship("School", back_populates="registration_requests")
+
+
+# ===== Новые таблицы: питание =====
+
+class MealRequest(Base):
+    __tablename__ = "meal_requests"
+    __table_args__ = (
+        UniqueConstraint("class_id", "request_date", "school_id", name="uq_meal_class_date_school"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    class_id = Column(Integer, ForeignKey("classes.id", ondelete="CASCADE"), nullable=False)
+    request_date = Column(Date, default=date.today, nullable=False)
+    submitted_by_id = Column(Integer, ForeignKey("teachers.id", ondelete="SET NULL"), nullable=True)
+    school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, default=1)
+    submitted_at = Column(DateTime, default=datetime.now, nullable=False)
+
+    class_ = relationship("Class", back_populates="meal_requests")
+    submitted_by = relationship("Teacher", back_populates="meal_requests")
+    items = relationship("MealRequestItem", back_populates="request", cascade="all, delete-orphan")
+
+
+class MealRequestItem(Base):
+    __tablename__ = "meal_request_items"
+
+    id = Column(Integer, primary_key=True)
+    request_id = Column(Integer, ForeignKey("meal_requests.id", ondelete="CASCADE"), nullable=False, index=True)
+    student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True)
+    is_eating = Column(Boolean, default=True, nullable=False)
+    meal_type = Column(String(10), default="paid", nullable=False)  # "paid" или "free"
+
+    request = relationship("MealRequest", back_populates="items")
+    student = relationship("Student", back_populates="meal_items")

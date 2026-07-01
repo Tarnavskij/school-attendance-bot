@@ -16,7 +16,7 @@ def get_today_session_card(telegram_id: int) -> str | None:
     if not teacher:
         return None
 
-    session = get_teacher_session_today(teacher.id, date.today())
+    session = get_teacher_session_today(teacher.id, date.today(), school_id=teacher.school_id)
     if not session:
         return None
 

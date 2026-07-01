@@ -5,7 +5,8 @@ from datetime import date, datetime
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import func
-from database import SessionLocal, Teacher, Class, Student, AttendanceSession, AttendanceRecord, RegistrationRequest, School
+from database import SessionLocal, Teacher, Class, Student, AttendanceSession, AttendanceRecord, RegistrationRequest, \
+    School, MealRequest, MealRequestItem
 from core.school_context import get_current_school_id
 
 @contextmanager
@@ -370,14 +371,14 @@ def get_sessions_for_report(target_date: date) -> list[SessionDTO]:
                            school_name=s.school.name if s.school else None)
                 for s in sessions]
 
-
-def set_absence_reason(student_id: int, class_id: int, target_date: date, reason: str) -> None:
+def set_absence_reason(student_id: int, class_id: int, target_date: date, reason: str, school_id: int | None = None) -> None:
+    sid = school_id if school_id is not None else get_current_school_id()
     with get_db() as db:
         sess = db.query(AttendanceSession).filter(
             AttendanceSession.class_id == class_id,
             AttendanceSession.session_date == target_date,
             AttendanceSession.status.in_(["completed", "auto_completed"]),
-            AttendanceSession.school_id == get_current_school_id(),
+            AttendanceSession.school_id == sid,
         ).first()
         if not sess:
             return
@@ -388,14 +389,15 @@ def set_absence_reason(student_id: int, class_id: int, target_date: date, reason
         ).update({"reason": reason})
 
 
-def get_absent_students_today(class_id: int, today_date: date) -> dict[int, dict]:
+def get_absent_students_today(class_id: int, today_date: date, school_id: int | None = None) -> dict[int, dict]:
+    sid = school_id if school_id is not None else get_current_school_id()
     with get_db() as db:
         sess = db.query(AttendanceSession).options(
             joinedload(AttendanceSession.records).joinedload(AttendanceRecord.student),
         ).filter(AttendanceSession.class_id == class_id,
                  AttendanceSession.status.in_(["completed", "auto_completed"]),
                  AttendanceSession.session_date == today_date,
-                 AttendanceSession.school_id == get_current_school_id()).first()
+                 AttendanceSession.school_id == sid).first()
 
         if not sess:
             return {}
@@ -405,8 +407,6 @@ def get_absent_students_today(class_id: int, today_date: date) -> dict[int, dict
             if not rec.is_present:
                 result[rec.student_id] = {"name": rec.student.name, "reason": rec.reason}
         return result
-
-
 def get_pending_requests() -> list[dict]:
     from core.roles import ROLE_LABELS
     with get_db() as db:
@@ -577,6 +577,117 @@ def get_teacher_session_today(teacher_id: int, today_date: date, school_id: int 
             school_name=s.school.name if s.school else None
         )
 
+# ===== Питание =====
+
+@dataclass
+class MealItemDTO:
+    student_id: int
+    name: str
+    meal_type: str  # "paid"/"free"
+    is_eating: bool
+
+@dataclass
+class MealRequestDTO:
+    class_id: int
+    class_name: str
+    items: list[MealItemDTO]
+
+
+def get_or_create_meal_request(class_id: int, school_id: int | None = None) -> MealRequestDTO:
+    """
+    Возвращает существующую заявку на сегодня для класса, или создаёт черновик
+    со всеми учениками (по умолчанию все едят, тип из профиля).
+    """
+    sid = school_id if school_id is not None else get_current_school_id()
+    today = date.today()
+    with get_db() as db:
+        req = db.query(MealRequest).filter(
+            MealRequest.class_id == class_id,
+            MealRequest.request_date == today,
+            MealRequest.school_id == sid,
+        ).first()
+        if req:
+            items = [MealItemDTO(
+                student_id=i.student_id,
+                name=i.student.name,
+                meal_type=i.meal_type,
+                is_eating=i.is_eating,
+            ) for i in req.items]
+            # если каких-то учеников нет в items (новые ученики), добавим их позже при сохранении
+            return MealRequestDTO(class_id=class_id, class_name=req.class_.name, items=items)
+
+        # Новой заявки ещё нет – создаём "виртуальный" список, но не пишем в базу до подтверждения
+        students = db.query(Student).filter(
+            Student.class_id == class_id,
+            Student.school_id == sid,
+        ).order_by(Student.name).all()
+        items = [MealItemDTO(
+            student_id=s.id,
+            name=s.name,
+            meal_type=s.meal_type,
+            is_eating=True,
+        ) for s in students]
+        return MealRequestDTO(
+            class_id=class_id,
+            class_name=db.query(Class).filter(Class.id == class_id).first().name,
+            items=items,
+        )
+
+
+def save_meal_request(class_id: int, teacher_id: int, items: list[MealItemDTO], school_id: int | None = None) -> MealRequest:
+    """
+    Сохраняет (создаёт или обновляет) заявку на питание на сегодня.
+    """
+    sid = school_id if school_id is not None else get_current_school_id()
+    today = date.today()
+    with get_db() as db:
+        req = db.query(MealRequest).filter(
+            MealRequest.class_id == class_id,
+            MealRequest.request_date == today,
+            MealRequest.school_id == sid,
+        ).first()
+        if req:
+            # Удаляем старые items и создаём новые
+            db.query(MealRequestItem).filter(MealRequestItem.request_id == req.id).delete()
+            for item in items:
+                db.add(MealRequestItem(
+                    request_id=req.id,
+                    student_id=item.student_id,
+                    is_eating=item.is_eating,
+                    meal_type=item.meal_type,
+                ))
+            req.submitted_at = datetime.now()
+            req.submitted_by_id = teacher_id
+            db.flush()
+            return req
+        else:
+            # Создаём новую заявку
+            req = MealRequest(
+                class_id=class_id,
+                request_date=today,
+                submitted_by_id=teacher_id,
+                school_id=sid,
+            )
+            db.add(req)
+            db.flush()
+            for item in items:
+                db.add(MealRequestItem(
+                    request_id=req.id,
+                    student_id=item.student_id,
+                    is_eating=item.is_eating,
+                    meal_type=item.meal_type,
+                ))
+            db.flush()
+            return req
+
+
+def update_student_meal_type(student_id: int, meal_type: str) -> None:
+    """Изменяет тип питания ученика (paid/free)."""
+    with get_db() as db:
+        st = db.query(Student).filter(Student.id == student_id).first()
+        if st:
+            st.meal_type = meal_type
+            db.flush()
 
 # ===== Школы (глобальные, без фильтра) =====
 

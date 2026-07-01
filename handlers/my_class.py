@@ -7,6 +7,7 @@ from repositories import get_teacher_by_telegram_id, get_all_classes, get_absent
 from core.keyboards import BTN_MY_CLASS, build_menu_keyboard, back_to_menu_btn
 from core.roles import check_access, is_admin, Role
 from core.constants import ABSENCE_REASONS
+from core.school_context import get_current_school_id
 
 my_class_router = Router()
 
@@ -23,7 +24,6 @@ async def my_class_handler(message: Message) -> None:
         if not classes:
             await message.answer("Нет доступных классов.")
             return
-        # Группировка по параллелям
         kb = _build_class_grid_keyboard(classes, callback_prefix="mc:view")
         await message.answer("Выберите класс для просмотра:", reply_markup=kb)
         return
@@ -33,30 +33,34 @@ async def my_class_handler(message: Message) -> None:
         await message.answer("У вас не указан класс. Обратитесь к администратору.")
         return
 
-    await _show_absent_list(message, teacher.class_id, edit=False)
+    await _show_absent_list(message, teacher.class_id, teacher.school_id, edit=False)
 
 
 @my_class_router.callback_query(F.data.startswith("mc:view:"))
 async def view_class(callback: CallbackQuery) -> None:
-    if not check_access(callback.from_user.id, [Role.CLASS_TEACHER]):
+    user_id = callback.from_user.id
+    if not check_access(user_id, [Role.CLASS_TEACHER]):
         await callback.answer("Нет доступа.", show_alert=True)
         return
     class_id = int(callback.data.split(":")[-1])
-    await _show_absent_list(callback.message, class_id, edit=True)
+    school_id = _get_school_id(user_id)
+    await _show_absent_list(callback.message, class_id, school_id, edit=True)
     await callback.answer()
 
 
 @my_class_router.callback_query(F.data.startswith("mc:reason_menu:"))
 async def show_reason_menu(callback: CallbackQuery) -> None:
-    if not check_access(callback.from_user.id, [Role.CLASS_TEACHER]):
+    user_id = callback.from_user.id
+    if not check_access(user_id, [Role.CLASS_TEACHER]):
         await callback.answer("Нет доступа.", show_alert=True)
         return
 
     _, _, student_id_str, class_id_str = callback.data.split(":")
     student_id = int(student_id_str)
     class_id = int(class_id_str)
+    school_id = _get_school_id(user_id)
 
-    absent = get_absent_students_today(class_id, date.today())
+    absent = get_absent_students_today(class_id, date.today(), school_id=school_id)
     student_info = absent.get(student_id)
     student_name = student_info["name"] if student_info else f"ID {student_id}"
 
@@ -76,39 +80,49 @@ async def show_reason_menu(callback: CallbackQuery) -> None:
 
 @my_class_router.callback_query(F.data.startswith("mc:reason:"))
 async def apply_reason(callback: CallbackQuery) -> None:
+    user_id = callback.from_user.id
+    if not check_access(user_id, [Role.CLASS_TEACHER]):
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+
     parts = callback.data.split(":")
     student_id = int(parts[2])
     class_id = int(parts[3])
     reason_idx = int(parts[4])
     reason = ABSENCE_REASONS[reason_idx]
+    school_id = _get_school_id(user_id)
 
-    set_absence_reason(student_id, class_id, date.today(), reason)
+    set_absence_reason(student_id, class_id, date.today(), reason, school_id=school_id)
     await callback.answer("Причина сохранена.")
-    await _show_absent_list(callback.message, class_id, edit=True)
+    await _show_absent_list(callback.message, class_id, school_id, edit=True)
+
+
+def _get_school_id(user_id: int) -> int:
+    """Возвращает school_id: для админа глобальный, для учителя из профиля."""
+    if is_admin(user_id):
+        return get_current_school_id()
+    teacher = get_teacher_by_telegram_id(user_id)
+    return teacher.school_id if teacher else get_current_school_id()
 
 
 def _build_class_grid_keyboard(classes, callback_prefix: str) -> InlineKeyboardMarkup:
-    """Создаёт клавиатуру с классами, сгруппированными по параллелям."""
     groups: dict[int, list] = {}
     for c in classes:
         grade = c.grade or 0
         groups.setdefault(grade, []).append(c)
-
     rows = []
     for grade in sorted(groups.keys()):
         buttons = [InlineKeyboardButton(text=c.name, callback_data=f"{callback_prefix}:{c.id}") for c in groups[grade]]
         rows.append(buttons)
-
     rows.append([back_to_menu_btn()])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def _show_absent_list(message: Message, class_id: int, edit: bool = False) -> None:
-    """Показывает (или редактирует) список отсутствующих с кнопками."""
+async def _show_absent_list(message: Message, class_id: int, school_id: int, edit: bool = False) -> None:
     today = date.today()
-    absent = get_absent_students_today(class_id, today)
+    absent = get_absent_students_today(class_id, today, school_id=school_id)
 
-    classes = get_all_classes()
+    classes = get_all_classes(school_id=school_id)
     class_obj = next((c for c in classes if c.id == class_id), None)
     class_name = class_obj.name if class_obj else "?"
 

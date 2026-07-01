@@ -16,6 +16,8 @@ from handlers.director import director_router
 from handlers.attendance import attendance_router
 from handlers.my_class import my_class_router
 from handlers.secretary import secretary_router
+from handlers.meals import meals_router
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,6 +52,7 @@ async def main() -> None:
     dp.include_router(attendance_router)
     dp.include_router(my_class_router)
     dp.include_router(secretary_router)
+    dp.include_router(meals_router)
     dp.include_router(common_router)
 
     # Кладём функцию уведомления прямо в объект бота
