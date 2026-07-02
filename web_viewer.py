@@ -12,6 +12,7 @@ from flask import (
 from markupsafe import escape
 from sqlalchemy.orm import joinedload
 from database import SessionLocal, AttendanceSession, AttendanceRecord, RegistrationRequest, Teacher, Class
+from database import MealRequest, MealRequestItem, Student
 from config import DEFAULT_SCHOOL_ID, WEB_USERNAME, WEB_PASSWORD, FLASK_SECRET_KEY, SSE_PUBLISH_TOKEN
 from import_students import import_from_excel
 import threading
@@ -52,7 +53,7 @@ def require_auth(f):
     return decorated
 
 
-# ── HTML шаблон (с добавленными скриптами) ───────────────────────────────────
+# ── HTML шаблон (полный, с разделом питания) ─────────────────────────────────
 
 TEMPLATE = r"""<!DOCTYPE html>
 <html lang="ru">
@@ -164,6 +165,9 @@ TEMPLATE = r"""<!DOCTYPE html>
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
   }
   .stat-label { font-size: 13px; color: rgba(255,255,255,0.4); margin-top: 4px; }
+  /* стили для питания */
+  .meal-class-row { cursor: pointer; }
+  .meal-class-row:hover td { background: rgba(255,255,255,0.08); }
 </style>
 </head>
 <body>
@@ -176,6 +180,7 @@ TEMPLATE = r"""<!DOCTYPE html>
       <span style="background:#ff453a;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:4px;">{{ pending_count }}</span>
     {% endif %}
   </a>
+  <a href="/meals" class="{{ 'active' if page == 'meals' }}">🍽️ Питание</a>
   <a href="/schools" class="{{ 'active' if page == 'schools' }}">🏫 Школы</a>
   <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
     <form method="get" action="/switch_school" style="margin:0;">
@@ -378,6 +383,185 @@ TEMPLATE = r"""<!DOCTYPE html>
         <tr><th>Имя</th><th>Telegram ID</th><th>Роль</th><th>Класс</th><th>Статус</th><th>Действия</th></tr>
         ${rows}
       </table>`;
+    }
+  </script>
+
+{% elif page == 'meals' %}
+  <div class="page-title">🍽️ Питание</div>
+  <div class="glass">
+    <div class="toolbar">
+      <form method="get" style="display:flex;gap:10px;align-items:center">
+        <input type="date" name="date" value="{{ date }}">
+        <button type="submit" class="btn btn-primary">Показать</button>
+      </form>
+      <a href="/download_meal_excel?date={{ date }}&type=short" class="btn btn-primary">📥 Краткий Excel</a>
+      <a href="/download_meal_excel?date={{ date }}&type=full" class="btn btn-primary">📥 Полный Excel</a>
+    </div>
+  </div>
+
+  <div id="meals-stats-block" style="margin-bottom:20px;">
+    {% if meal_stats %}
+    <div class="stats">
+      <div class="stat-card"><div class="stat-number">{{ meal_stats.total_classes }}</div><div class="stat-label">Классов подано</div></div>
+      <div class="stat-card"><div class="stat-number">{{ meal_stats.total_meals }}</div><div class="stat-label">Всего порций</div></div>
+      <div class="stat-card"><div class="stat-number">{{ meal_stats.paid }}</div><div class="stat-label">Платно</div></div>
+      <div class="stat-card"><div class="stat-number">{{ meal_stats.free }}</div><div class="stat-label">Бесплатно</div></div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="glass" id="meals-table-container">
+    {% if meals_data %}
+    <table>
+      <tr><th>Класс</th><th>Всего</th><th>Платно</th><th>Бесплатно</th><th>Учитель</th></tr>
+      {% for row in meals_data %}
+      <tr class="meal-class-row" data-class-id="{{ row.class_id }}">
+        <td>{{ row.class_name }}</td>
+        <td>{{ row.total }}</td>
+        <td>{{ row.paid }}</td>
+        <td>{{ row.free }}</td>
+        <td>{{ row.teacher }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <div class="empty">Нет поданных заявок за эту дату</div>
+    {% endif %}
+  </div>
+
+  <div id="meal-detail-container" style="display:none; margin-top:20px;">
+    <div class="glass">
+      <table id="meal-detail-table">
+        <tr><th>Ученик</th><th>Тип</th><th>Ест</th></tr>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    // раскрытие детализации
+    document.querySelectorAll('.meal-class-row').forEach(row => {
+      row.addEventListener('click', async () => {
+        const classId = row.dataset.classId;
+        const detailContainer = document.getElementById('meal-detail-container');
+        const detailTable = document.getElementById('meal-detail-table');
+        if (detailContainer.style.display === 'block' && detailContainer.dataset.currentClass === classId) {
+          detailContainer.style.display = 'none';
+          return;
+        }
+        detailContainer.style.display = 'block';
+        detailContainer.dataset.currentClass = classId;
+        detailTable.innerHTML = '<tr><td colspan="3">Загрузка...</td></tr>';
+        try {
+          const params = new URLSearchParams(window.location.search);
+          const dateStr = params.get('date') || new Date().toISOString().slice(0,10);
+          const resp = await fetch(`/api/meals/class?class_id=${classId}&date=${dateStr}`);
+          const students = await resp.json();
+          if (students.length === 0) {
+            detailTable.innerHTML = '<tr><td colspan="3">Нет данных</td></tr>';
+          } else {
+            let rows = students.map(s => {
+              const typeEmoji = s.meal_type === 'paid' ? '💰' : '🆓';
+              const eatingIcon = s.is_eating ? '✅' : '❌';
+              return `<tr><td>${s.name}</td><td>${typeEmoji} ${s.meal_type === 'paid' ? 'платно' : 'бесплатно'}</td><td>${eatingIcon}</td></tr>`;
+            }).join('');
+            detailTable.innerHTML = '<tr><th>Ученик</th><th>Тип</th><th>Ест</th></tr>' + rows;
+          }
+        } catch (err) {
+          detailTable.innerHTML = '<tr><td colspan="3">Ошибка загрузки</td></tr>';
+        }
+      });
+    });
+
+    // SSE обновление
+    const mealsSource = new EventSource('/stream?token={{ sse_token }}');
+    mealsSource.addEventListener('meals_update', async () => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const dateStr = params.get('date') || new Date().toISOString().slice(0,10);
+        const resp = await fetch(`/api/meals?date=${dateStr}`);
+        const json = await resp.json();
+        updateMealsTable(json);
+      } catch(err) {
+        console.error('Не удалось обновить питание', err);
+      }
+    });
+    // обновление при смене школы
+    mealsSource.addEventListener('school_switch', async () => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const dateStr = params.get('date') || new Date().toISOString().slice(0,10);
+        const resp = await fetch(`/api/meals?date=${dateStr}`);
+        const json = await resp.json();
+        updateMealsTable(json);
+      } catch(err) {
+        console.error('Не удалось обновить питание после смены школы', err);
+      }
+    });
+
+    function updateMealsTable(json) {
+      const statsContainer = document.getElementById('meals-stats-block');
+      const tableContainer = document.getElementById('meals-table-container');
+      if (json.stats) {
+        statsContainer.innerHTML = `
+          <div class="stats">
+            <div class="stat-card"><div class="stat-number">${json.stats.total_classes}</div><div class="stat-label">Классов подано</div></div>
+            <div class="stat-card"><div class="stat-number">${json.stats.total_meals}</div><div class="stat-label">Всего порций</div></div>
+            <div class="stat-card"><div class="stat-number">${json.stats.paid}</div><div class="stat-label">Платно</div></div>
+            <div class="stat-card"><div class="stat-number">${json.stats.free}</div><div class="stat-label">Бесплатно</div></div>
+          </div>`;
+      } else {
+        statsContainer.innerHTML = '';
+      }
+      if (json.data && json.data.length > 0) {
+        let rows = json.data.map(row => {
+          return `<tr class="meal-class-row" data-class-id="${row.class_id}">
+            <td>${row.class_name}</td>
+            <td>${row.total}</td>
+            <td>${row.paid}</td>
+            <td>${row.free}</td>
+            <td>${row.teacher}</td>
+          </tr>`;
+        }).join('');
+        tableContainer.innerHTML = `<table>
+          <tr><th>Класс</th><th>Всего</th><th>Платно</th><th>Бесплатно</th><th>Учитель</th></tr>
+          ${rows}
+        </table>`;
+        // заново вешаем обработчики клика
+        document.querySelectorAll('.meal-class-row').forEach(row => {
+          row.addEventListener('click', async () => {
+            const classId = row.dataset.classId;
+            const detailContainer = document.getElementById('meal-detail-container');
+            const detailTable = document.getElementById('meal-detail-table');
+            if (detailContainer.style.display === 'block' && detailContainer.dataset.currentClass === classId) {
+              detailContainer.style.display = 'none';
+              return;
+            }
+            detailContainer.style.display = 'block';
+            detailContainer.dataset.currentClass = classId;
+            detailTable.innerHTML = '<tr><td colspan="3">Загрузка...</td></tr>';
+            try {
+              const params = new URLSearchParams(window.location.search);
+              const dateStr = params.get('date') || new Date().toISOString().slice(0,10);
+              const resp = await fetch(`/api/meals/class?class_id=${classId}&date=${dateStr}`);
+              const students = await resp.json();
+              if (students.length === 0) {
+                detailTable.innerHTML = '<tr><td colspan="3">Нет данных</td></tr>';
+              } else {
+                let rows = students.map(s => {
+                  const typeEmoji = s.meal_type === 'paid' ? '💰' : '🆓';
+                  const eatingIcon = s.is_eating ? '✅' : '❌';
+                  return `<tr><td>${s.name}</td><td>${typeEmoji} ${s.meal_type === 'paid' ? 'платно' : 'бесплатно'}</td><td>${eatingIcon}</td></tr>`;
+                }).join('');
+                detailTable.innerHTML = '<tr><th>Ученик</th><th>Тип</th><th>Ест</th></tr>' + rows;
+              }
+            } catch (err) {
+              detailTable.innerHTML = '<tr><td colspan="3">Ошибка загрузки</td></tr>';
+            }
+          });
+        });
+      } else {
+        tableContainer.innerHTML = '<div class="empty">Нет поданных заявок за эту дату</div>';
+      }
     }
   </script>
 
@@ -781,6 +965,185 @@ def download_excel():
     )
 
 
+# ── Питание (вспомогательные функции и маршруты) ─────────────────────────────
+
+def _load_meal_data(date_str: str, school_id: int):
+    db = SessionLocal()
+    try:
+        reqs = (
+            db.query(MealRequest)
+            .options(
+                joinedload(MealRequest.class_),
+                joinedload(MealRequest.submitted_by),
+                joinedload(MealRequest.items),
+            )
+            .filter(
+                MealRequest.school_id == school_id,
+                MealRequest.request_date == date_str,
+            )
+            .order_by(MealRequest.class_id)
+            .all()
+        )
+        rows = []
+        for req in reqs:
+            total = len(req.items)
+            paid = sum(1 for i in req.items if i.meal_type == "paid")
+            free = total - paid
+            teacher_name = req.submitted_by.name if req.submitted_by else "—"
+            rows.append({
+                "class_name": req.class_.name,
+                "class_id": req.class_id,
+                "total": total,
+                "paid": paid,
+                "free": free,
+                "teacher": teacher_name,
+            })
+        stats = {
+            "total_classes": len(reqs),
+            "total_meals": sum(r["total"] for r in rows),
+            "paid": sum(r["paid"] for r in rows),
+            "free": sum(r["free"] for r in rows),
+        } if rows else None
+        return rows, stats
+    finally:
+        db.close()
+
+
+def _load_class_meal_students(class_id: int, date_str: str, school_id: int):
+    db = SessionLocal()
+    try:
+        req = (
+            db.query(MealRequest)
+            .options(joinedload(MealRequest.items).joinedload(MealRequestItem.student))
+            .filter(
+                MealRequest.class_id == class_id,
+                MealRequest.request_date == date_str,
+                MealRequest.school_id == school_id,
+            )
+            .first()
+        )
+        if not req:
+            return []
+        result = []
+        for item in req.items:
+            result.append({
+                "name": item.student.name,
+                "meal_type": item.meal_type,
+                "is_eating": item.is_eating,
+            })
+        return result
+    finally:
+        db.close()
+
+
+@app.route("/api/meals")
+@require_auth
+def api_meals():
+    school_id = get_web_school_id()
+    date_str = request.args.get("date", date.today().strftime("%Y-%m-%d"))
+    rows, stats = _load_meal_data(date_str, school_id)
+    return jsonify({"data": rows, "stats": stats})
+
+
+@app.route("/api/meals/class")
+@require_auth
+def api_meals_class():
+    school_id = get_web_school_id()
+    date_str = request.args.get("date", date.today().strftime("%Y-%m-%d"))
+    class_id = request.args.get("class_id", type=int)
+    if not class_id:
+        return jsonify([])
+    students = _load_class_meal_students(class_id, date_str, school_id)
+    return jsonify(students)
+
+
+@app.route("/meals")
+@require_auth
+def meals_page():
+    school_id = get_web_school_id()
+    date_str = request.args.get("date", date.today().strftime("%Y-%m-%d"))
+    rows, stats = _load_meal_data(date_str, school_id)
+    sse_token = _generate_sse_token()
+    return render_template_string(
+        TEMPLATE, page="meals",
+        meals_data=rows, meal_stats=stats,
+        date=date_str,
+        pending_count=_pending_count(school_id),
+        all_schools=get_all_schools_data(),
+        current_school_id=school_id,
+        sse_token=sse_token,
+    )
+
+
+@app.route("/download_meal_excel")
+@require_auth
+def download_meal_excel():
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment
+    school_id = get_web_school_id()
+    date_str = request.args.get("date", date.today().strftime("%Y-%m-%d"))
+    export_type = request.args.get("type", "short")
+
+    wb = Workbook()
+    # Лист "Сводка"
+    ws_summary = wb.active
+    ws_summary.title = "Сводка"
+    headers = ["Класс", "Всего", "Платно", "Бесплатно", "Учитель"]
+    for col, h in enumerate(headers, 1):
+        cell = ws_summary.cell(row=1, column=col, value=h)
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal="center")
+
+    rows_summary, _ = _load_meal_data(date_str, school_id)
+    for row_data in rows_summary:
+        ws_summary.append([
+            row_data["class_name"],
+            row_data["total"],
+            row_data["paid"],
+            row_data["free"],
+            row_data["teacher"],
+        ])
+    # автоширина для сводки
+    for col in ws_summary.columns:
+        width = max((len(str(cell.value or "")) for cell in col), default=10) + 2
+        ws_summary.column_dimensions[col[0].column_letter].width = width
+
+    if export_type == "full":
+        # Лист "Детализация"
+        ws_detail = wb.create_sheet("Детализация")
+        detail_headers = ["Класс", "Ученик", "Тип питания", "Ест"]
+        for col, h in enumerate(detail_headers, 1):
+            cell = ws_detail.cell(row=1, column=col, value=h)
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="center")
+        # Получаем все классы школы
+        db = SessionLocal()
+        try:
+            classes = db.query(Class).filter(Class.school_id == school_id).order_by(Class.name).all()
+        finally:
+            db.close()
+        for cls in classes:
+            students = _load_class_meal_students(cls.id, date_str, school_id)
+            for s in students:
+                meal_type_str = "платно" if s["meal_type"] == "paid" else "бесплатно"
+                eating_str = "да" if s["is_eating"] else "нет"
+                ws_detail.append([cls.name, s["name"], meal_type_str, eating_str])
+        # автоширина для детализации
+        for col in ws_detail.columns:
+            width = max((len(str(cell.value or "")) for cell in col), default=10) + 2
+            ws_detail.column_dimensions[col[0].column_letter].width = width
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=f"meals_{date_str}.xlsx",
+    )
+
+
 # ── SSE и внутренний publish ──────────────────────────────────────────────────
 
 @app.route("/stream")
@@ -813,6 +1176,7 @@ def stream():
             "X-Accel-Buffering": "no",
         }
     )
+
 
 @app.route("/_publish", methods=["POST"])
 def internal_publish():

@@ -38,9 +38,8 @@ async def _notify_chefs_for_class(bot: Bot, class_id: int, school_id: int):
 @meals_router.message(F.text == BTN_MEAL)
 async def meal_menu(message: Message):
     user_id = message.from_user.id
-    # Только классный руководитель (или админ) может работать с заявками
     if not check_access(user_id, [Role.CLASS_TEACHER]):
-        return  # шеф-повара и другие пропускаем молча
+        return
 
     teacher = get_teacher_by_telegram_id(user_id)
     if is_admin(user_id):
@@ -193,8 +192,14 @@ async def submit_meal(callback: CallbackQuery):
     existed_before = is_meal_request_exists(class_id, date.today(), school_id)
     save_meal_request(class_id, teacher_id, items, school_id=school_id)
 
+    # Оповещаем шеф-поваров (бот)
     if existed_before:
         await _notify_chefs_for_class(callback.bot, class_id, school_id)
+
+    # Оповещаем веб-панель (SSE) – при любом сохранении
+    notify = getattr(callback.bot, "notify_web", None)
+    if notify:
+        await notify("meals_update", {"school_id": school_id})
 
     meal_states.pop(callback.message.chat.id, None)
     await callback.message.edit_text("✅ Заявка на питание отправлена.", reply_markup=None)
