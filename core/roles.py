@@ -10,6 +10,7 @@ class Role(StrEnum):
     CLASS_TEACHER = "class_teacher"
     SUBJECT_TEACHER = "subject_teacher"
     SECRETARY = "secretary"
+    CHEF = "chef"
 
 
 ROLE_LABELS: dict[str, str] = {
@@ -18,6 +19,7 @@ ROLE_LABELS: dict[str, str] = {
     Role.CLASS_TEACHER: "Классный руководитель",
     Role.SUBJECT_TEACHER: "Учитель-предметник",
     Role.SECRETARY: "Секретарь",
+    Role.CHEF: "Шеф-повар",
 }
 
 ALL_ROLES = list(ROLE_LABELS.keys())

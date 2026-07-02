@@ -371,6 +371,7 @@ def get_sessions_for_report(target_date: date) -> list[SessionDTO]:
                            school_name=s.school.name if s.school else None)
                 for s in sessions]
 
+
 def set_absence_reason(student_id: int, class_id: int, target_date: date, reason: str, school_id: int | None = None) -> None:
     sid = school_id if school_id is not None else get_current_school_id()
     with get_db() as db:
@@ -407,6 +408,8 @@ def get_absent_students_today(class_id: int, today_date: date, school_id: int | 
             if not rec.is_present:
                 result[rec.student_id] = {"name": rec.student.name, "reason": rec.reason}
         return result
+
+
 def get_pending_requests() -> list[dict]:
     from core.roles import ROLE_LABELS
     with get_db() as db:
@@ -577,6 +580,7 @@ def get_teacher_session_today(teacher_id: int, today_date: date, school_id: int 
             school_name=s.school.name if s.school else None
         )
 
+
 # ===== Питание =====
 
 @dataclass
@@ -585,6 +589,7 @@ class MealItemDTO:
     name: str
     meal_type: str  # "paid"/"free"
     is_eating: bool
+
 
 @dataclass
 class MealRequestDTO:
@@ -613,10 +618,8 @@ def get_or_create_meal_request(class_id: int, school_id: int | None = None) -> M
                 meal_type=i.meal_type,
                 is_eating=i.is_eating,
             ) for i in req.items]
-            # если каких-то учеников нет в items (новые ученики), добавим их позже при сохранении
             return MealRequestDTO(class_id=class_id, class_name=req.class_.name, items=items)
 
-        # Новой заявки ещё нет – создаём "виртуальный" список, но не пишем в базу до подтверждения
         students = db.query(Student).filter(
             Student.class_id == class_id,
             Student.school_id == sid,
@@ -634,10 +637,19 @@ def get_or_create_meal_request(class_id: int, school_id: int | None = None) -> M
         )
 
 
+def is_meal_request_exists(class_id: int, request_date: date, school_id: int | None = None) -> bool:
+    """Проверяет, существует ли заявка на указанную дату."""
+    sid = school_id if school_id is not None else get_current_school_id()
+    with get_db() as db:
+        return db.query(MealRequest).filter(
+            MealRequest.class_id == class_id,
+            MealRequest.request_date == request_date,
+            MealRequest.school_id == sid,
+        ).first() is not None
+
+
 def save_meal_request(class_id: int, teacher_id: int, items: list[MealItemDTO], school_id: int | None = None) -> MealRequest:
-    """
-    Сохраняет (создаёт или обновляет) заявку на питание на сегодня.
-    """
+    """Сохраняет (создаёт или обновляет) заявку на питание на сегодня."""
     sid = school_id if school_id is not None else get_current_school_id()
     today = date.today()
     with get_db() as db:
@@ -647,7 +659,6 @@ def save_meal_request(class_id: int, teacher_id: int, items: list[MealItemDTO], 
             MealRequest.school_id == sid,
         ).first()
         if req:
-            # Удаляем старые items и создаём новые
             db.query(MealRequestItem).filter(MealRequestItem.request_id == req.id).delete()
             for item in items:
                 db.add(MealRequestItem(
@@ -661,7 +672,6 @@ def save_meal_request(class_id: int, teacher_id: int, items: list[MealItemDTO], 
             db.flush()
             return req
         else:
-            # Создаём новую заявку
             req = MealRequest(
                 class_id=class_id,
                 request_date=today,
@@ -688,6 +698,65 @@ def update_student_meal_type(student_id: int, meal_type: str) -> None:
         if st:
             st.meal_type = meal_type
             db.flush()
+
+
+def get_chef_telegram_ids(school_id: int) -> list[int]:
+    """Возвращает telegram_id всех активных шеф-поваров в школе."""
+    with get_db() as db:
+        chefs = db.query(Teacher.telegram_id).filter(
+            Teacher.school_id == school_id,
+            Teacher.role == "chef",
+            Teacher.is_active == True,
+        ).all()
+        return [c[0] for c in chefs]
+
+
+def get_meal_summary(school_id: int, target_date: date | None = None) -> str:
+    """Полная сводка по питанию на заданную дату (по умолчанию сегодня)."""
+    if target_date is None:
+        target_date = date.today()
+    with get_db() as db:
+        requests = db.query(MealRequest).options(
+            joinedload(MealRequest.class_),
+            joinedload(MealRequest.submitted_by),
+            joinedload(MealRequest.items),
+        ).filter(
+            MealRequest.school_id == school_id,
+            MealRequest.request_date == target_date,
+        ).order_by(MealRequest.class_id).all()
+
+        if not requests:
+            return f"🍽️ На {target_date.strftime('%d.%m.%Y')} заявок нет."
+
+        lines = [f"🍽️ Питание на {target_date.strftime('%d.%m.%Y')}"]
+        for req in requests:
+            total = len(req.items)
+            paid = sum(1 for i in req.items if i.meal_type == "paid")
+            free = total - paid
+            teacher_name = req.submitted_by.name if req.submitted_by else "—"
+            lines.append(f"{req.class_.name}: всего {total} (платно {paid}, бесплатно {free}) — {teacher_name}")
+        return "\n".join(lines)
+
+
+def get_class_meal_summary(class_id: int, school_id: int, target_date: date | None = None) -> str:
+    """Сводка по одному классу (для уведомлений об обновлении)."""
+    if target_date is None:
+        target_date = date.today()
+    with get_db() as db:
+        req = db.query(MealRequest).options(
+            joinedload(MealRequest.items),
+        ).filter(
+            MealRequest.class_id == class_id,
+            MealRequest.school_id == school_id,
+            MealRequest.request_date == target_date,
+        ).first()
+        if not req:
+            return "Заявка не найдена."
+        total = len(req.items)
+        paid = sum(1 for i in req.items if i.meal_type == "paid")
+        free = total - paid
+        return f"🔄 Обновление {req.class_.name}: всего {total} (платно {paid}, бесплатно {free})"
+
 
 # ===== Школы (глобальные, без фильтра) =====
 
@@ -770,6 +839,7 @@ def has_pending_request(telegram_id: int, school_id: int) -> bool:
             RegistrationRequest.school_id == school_id,
             RegistrationRequest.status == "pending",
         ).first() is not None
+
 
 def ensure_admin_teacher(telegram_id: int, school_id: int) -> None:
     """Создаёт запись Teacher для администратора в указанной школе, если её нет."""

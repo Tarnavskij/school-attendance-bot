@@ -21,3 +21,7 @@ WEB_USERNAME: str = os.getenv("WEB_USERNAME", "admin")
 WEB_PASSWORD: str = _require("WEB_PASSWORD")
 FLASK_SECRET_KEY: str = _require("FLASK_SECRET_KEY")
 SSE_PUBLISH_TOKEN: str = _require("SSE_PUBLISH_TOKEN")
+
+# Настройки времени автоматической сводки для шеф-повара (по умолчанию 9:00)
+MEAL_DEADLINE_HOUR: int = int(os.getenv("MEAL_DEADLINE_HOUR", "9"))
+MEAL_DEADLINE_MINUTE: int = int(os.getenv("MEAL_DEADLINE_MINUTE", "0"))

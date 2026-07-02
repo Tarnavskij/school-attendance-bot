@@ -8,7 +8,8 @@ from repositories import get_teacher_by_telegram_id
 BTN_MENU = "📋 Меню"
 BTN_START_ROLL = "🧑‍🏫 Начать перекличку"
 BTN_MY_CLASS = "👨‍🏫 Мой класс"
-BTN_MEAL = "🍽️ Питание"
+BTN_MEAL = "🍽️ Питание"                      # для классных руководителей
+BTN_CHEF_MEAL = "🍽️ Сводка питания"          # для шеф-повара
 BTN_SCHOOL_SUMMARY = "📊 Сводка по школе"
 BTN_TEACHER_LIST = "👥 Пользователи"
 BTN_STUDENTS = "🎓 Ученики"
@@ -51,10 +52,12 @@ def build_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     elif role == Role.CLASS_TEACHER:
         rows = [
             [KeyboardButton(text=BTN_START_ROLL), KeyboardButton(text=BTN_MY_CLASS)],
-            [KeyboardButton(text=BTN_MEAL)],  # ← кнопка питания
+            [KeyboardButton(text=BTN_MEAL)],
         ]
     elif role == Role.SECRETARY:
         rows = [[KeyboardButton(text=BTN_ROLL_STATUS)]]
+    elif role == Role.CHEF:
+        rows = [[KeyboardButton(text=BTN_CHEF_MEAL)]]
     else:
         rows = []
 
