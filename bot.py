@@ -1,13 +1,11 @@
 # bot.py
 import asyncio
-import logging
-
 import aiohttp
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from config import BOT_TOKEN, SSE_PUBLISH_TOKEN, MEAL_DEADLINE_HOUR, MEAL_DEADLINE_MINUTE
+from config import BOT_TOKEN, SSE_PUBLISH_TOKEN, MEAL_DEADLINE_HOUR, MEAL_DEADLINE_MINUTE, ADMIN_TELEGRAM_ID
 from services import ReportService
 from handlers.common import common_router
 from handlers.registration import registration_router
@@ -19,11 +17,16 @@ from handlers.secretary import secretary_router
 from handlers.chef import chef_router
 from handlers.meals import meals_router
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
-logger = logging.getLogger(__name__)
+# Новая система логирования
+from logging_config import setup_logging
+from logger import get_logger
+
+# Настройка логирования
+setup_logging()
+logger = get_logger(__name__)
+
+from ensure_admin import ensure_admin
+ensure_admin()
 
 WEB_INTERNAL_URL = "http://127.0.0.1:5001/_publish"
 
@@ -61,6 +64,16 @@ async def send_meal_summaries_to_chefs(bot: Bot):
 async def main() -> None:
     bot = Bot(token=BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
+
+    # Глобальный обработчик ошибок
+    @dp.errors()
+    async def error_handler(update, exception):
+        logger.error("Ошибка в боте", exc_info=exception, update=update)
+        try:
+            await bot.send_message(ADMIN_TELEGRAM_ID, f"⚠️ Ошибка в боте: {exception}")
+        except Exception:
+            pass
+        return True
 
     dp.include_router(registration_router)
     dp.include_router(admin_router)
