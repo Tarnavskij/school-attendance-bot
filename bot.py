@@ -20,16 +20,50 @@ from handlers.meals import meals_router
 # Новая система логирования
 from logging_config import setup_logging
 from logger import get_logger
+from ensure_admin import ensure_admin
 
 # Настройка логирования
 setup_logging()
 logger = get_logger(__name__)
 
-from ensure_admin import ensure_admin
+# Проверка БД при старте
+def check_database_connection():
+    try:
+        from database import engine
+        with engine.connect():
+            logger.info("Подключение к базе данных установлено.")
+    except Exception as e:
+        logger.critical(f"Не удалось подключиться к базе данных: {e}")
+        raise SystemExit(1)
+
+check_database_connection()
+
+# Гарантируем наличие администратора
 ensure_admin()
 
 WEB_INTERNAL_URL = "http://127.0.0.1:5001/_publish"
 
+# Простой rate-limiter для уведомлений об ошибках (не более 1 сообщения в минуту)
+_error_notify_cache = {}
+
+async def notify_admin_error(bot: Bot, error_text: str, update_str: str):
+    """Отправляет уведомление администратору с ограничением частоты."""
+    from time import time
+    key = f"error_{ADMIN_TELEGRAM_ID}"
+    last_time = _error_notify_cache.get(key, 0)
+    if time() - last_time < 60:
+        return  # не чаще 1 раза в минуту
+    _error_notify_cache[key] = time()
+    try:
+        await bot.send_message(
+            ADMIN_TELEGRAM_ID,
+            f"⚠️ Ошибка в боте:\n"
+            f"Обновление: {update_str}\n"
+            f"Ошибка: {error_text}\n"
+            f"Стек: см. логи."
+        )
+    except Exception:
+        pass
 
 async def notify_web_panel(event: str, data: dict | None = None) -> None:
     """Отправляет событие в веб-панель (SSE)."""
@@ -68,11 +102,15 @@ async def main() -> None:
     # Глобальный обработчик ошибок
     @dp.errors()
     async def error_handler(update, exception):
-        logger.error("Ошибка в боте", exc_info=exception, update=update)
-        try:
-            await bot.send_message(ADMIN_TELEGRAM_ID, f"⚠️ Ошибка в боте: {exception}")
-        except Exception:
-            pass
+        # Логируем полный стектрейс
+        logger.error(
+            "Ошибка в боте",
+            exc_info=exception,
+            update=update,
+        )
+        # Уведомляем администратора (с ограничением частоты)
+        update_repr = str(update)[:200]  # обрезаем, чтобы не было слишком длинно
+        await notify_admin_error(bot, str(exception), update_repr)
         return True
 
     dp.include_router(registration_router)

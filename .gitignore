@@ -8,3 +8,5 @@ venv/
 *.xlsx
 *.log
 .idea/
+.coverage
+.DS_Store
