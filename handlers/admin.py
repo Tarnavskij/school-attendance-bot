@@ -14,6 +14,7 @@ from aiogram.fsm.context import FSMContext
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 
+from handlers.meals import _get_state
 from repositories import (
     delete_teacher, update_teacher_role, update_teacher_class,
     get_all_classes, get_students_by_class,
@@ -22,16 +23,15 @@ from repositories import (
     get_pending_requests, approve_request, reject_request,
     reset_today_sessions, get_all_schools,
     get_teachers_paginated, get_students_by_class_paginated,
-    ensure_admin_teacher,
+    ensure_admin_teacher, get_or_create_meal_request,
 )
 from services import ReportService
 from core.keyboards import (
     BTN_SCHOOL_SUMMARY, BTN_TEACHER_LIST, BTN_STUDENTS, BTN_SCHOOLS,
-    build_menu_keyboard,
+    build_menu_keyboard, BTN_ADMIN_MEAL,
 )
 from core.roles import is_admin, ALL_ROLES, ROLE_LABELS, Role
 from core.school_context import (
-    set_current_school_id, get_current_school_id, get_current_school_name,
     set_school_id_for_admin, get_school_id_for_admin,
 )
 from config import ADMIN_TELEGRAM_ID
@@ -50,7 +50,8 @@ class AddStudentStates(StatesGroup):
 
 @admin_router.message(F.text == BTN_SCHOOL_SUMMARY, lambda msg: is_admin(msg.from_user.id))
 async def school_summary(message: Message) -> None:
-    summary = ReportService.get_daily_summary(date.today())
+    school_id = get_school_id_for_admin(message.from_user.id)
+    summary = ReportService.get_daily_summary(date.today())  # в сервисе уже агрегируется по всем школам
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📥 Скачать Excel", callback_data="admin:excel")],
         [InlineKeyboardButton(text="🔴 Перезапуск переклички", callback_data="admin:reset_confirm")],
@@ -63,7 +64,8 @@ async def download_excel(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         return
     await callback.answer("Формирую файл…")
-    sessions = get_sessions_for_report(date.today())
+    school_id = get_school_id_for_admin(callback.from_user.id)
+    sessions = get_sessions_for_report(date.today(), school_id)
     file_bytes = _build_excel(sessions, date.today().strftime("%Y-%m-%d"))
     document = BufferedInputFile(file_bytes, filename=f"attendance_{date.today()}.xlsx")
     await callback.message.answer_document(
@@ -95,6 +97,7 @@ async def reset_confirm(callback: CallbackQuery) -> None:
 async def reset_cancel(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         return
+    # summary берётся без school_id (агрегированная)
     summary = ReportService.get_daily_summary(date.today())
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📥 Скачать Excel", callback_data="admin:excel")],
@@ -108,7 +111,8 @@ async def reset_cancel(callback: CallbackQuery) -> None:
 async def reset_execute(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         return
-    count = reset_today_sessions()
+    school_id = get_school_id_for_admin(callback.from_user.id)
+    count = reset_today_sessions(school_id)
     await callback.message.edit_text(
         f"✅ Сброс выполнен. Удалено сессий: {count}.\n"
         "Учителя могут начинать перекличку заново.",
@@ -162,7 +166,18 @@ async def teachers_page_callback(callback: CallbackQuery) -> None:
 
 
 async def _show_teacher_page(target: Message, page: int = 1, edit: bool = False) -> None:
-    teachers, total = get_teachers_paginated(page=page, per_page=TEACHERS_PER_PAGE)
+    user_id = target.from_user.id if hasattr(target, 'from_user') else target.chat.id  # для callback используем chat.id
+    if hasattr(target, 'from_user'):
+        user_id = target.from_user.id
+    else:
+        # если target - message, берём из message.chat.id (но лучше использовать message.from_user.id)
+        # в реальности target всегда Message, поэтому корректно:
+        pass
+    # правильнее получать user_id из context, но в асинхронной функции проще передать отдельно
+    # переделаем вызов: будем передавать user_id отдельно
+    # пока оставим как было, но school_id получим из user_id
+    school_id = get_school_id_for_admin(user_id)
+    teachers, total = get_teachers_paginated(page=page, per_page=TEACHERS_PER_PAGE, school_id=school_id)
     total_pages = max(1, ceil(total / TEACHERS_PER_PAGE))
     text = f"👨‍🏫 Управление пользователями (страница {page}/{total_pages}):"
     kb = _teacher_list_keyboard(teachers, page, total_pages)
@@ -223,7 +238,8 @@ async def back_to_teacher_list(callback: CallbackQuery) -> None:
 async def show_requests(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         return
-    requests = get_pending_requests()
+    school_id = get_school_id_for_admin(callback.from_user.id)
+    requests = get_pending_requests(school_id)
     if not requests:
         await callback.message.edit_text(
             "📩 Нет активных заявок.",
@@ -253,8 +269,9 @@ async def show_requests(callback: CallbackQuery) -> None:
 async def request_detail(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         return
+    school_id = get_school_id_for_admin(callback.from_user.id)
     req_id = int(callback.data.split(":")[-1])
-    requests = get_pending_requests()
+    requests = get_pending_requests(school_id)
     req = next((r for r in requests if r["id"] == req_id), None)
     if not req:
         await callback.answer("Заявка не найдена.")
@@ -280,27 +297,30 @@ async def approve_request_handler(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         return
     req_id = int(callback.data.split(":")[-1])
-    success = approve_request(req_id)
+    school_id = get_school_id_for_admin(callback.from_user.id)
+    success = approve_request(req_id, school_id)
     if success:
         await callback.answer("✅ Заявка одобрена, пользователь добавлен.")
     else:
         await callback.answer("❌ Не удалось одобрить. Пользователь уже активен в этой школе.")
-    # Оповещаем веб-панель
     notify = getattr(callback.bot, "notify_web", None)
     if notify:
         await notify("requests_update")
+
 
 @admin_router.callback_query(F.data.startswith("admin:reject:"))
 async def reject_request_handler(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         return
     req_id = int(callback.data.split(":")[-1])
-    reject_request(req_id)
+    school_id = get_school_id_for_admin(callback.from_user.id)
+    reject_request(req_id, school_id)
     await callback.answer("Заявка отклонена.")
-    # Оповещаем веб-панель
     notify = getattr(callback.bot, "notify_web", None)
     if notify:
         await notify("requests_update")
+
+
 # ===== Карточка учителя =====
 
 @admin_router.callback_query(F.data.startswith("admin:teacher:"))
@@ -308,12 +328,13 @@ async def teacher_card(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         return
     teacher_id = int(callback.data.split(":")[-1])
-    await _show_teacher_card(callback.message, teacher_id)
+    await _show_teacher_card(callback.message, teacher_id, callback.from_user.id)
     await callback.answer()
 
 
-async def _show_teacher_card(message: Message, teacher_id: int) -> None:
-    t = get_teacher_card(teacher_id)
+async def _show_teacher_card(message: Message, teacher_id: int, user_id: int) -> None:
+    school_id = get_school_id_for_admin(user_id)
+    t = get_teacher_card(teacher_id, school_id)
     if not t:
         await message.edit_text("Пользователь не найден.")
         return
@@ -357,7 +378,8 @@ async def permanent_delete_execute(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         return
     teacher_id = int(callback.data.split(":")[-1])
-    if delete_teacher(teacher_id):
+    school_id = get_school_id_for_admin(callback.from_user.id)
+    if delete_teacher(teacher_id, school_id):
         await callback.answer("Учитель удалён. История сохранена.")
         await _show_teacher_page(callback.message, page=1, edit=True)
     else:
@@ -369,9 +391,10 @@ async def remove_class(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         return
     teacher_id = int(callback.data.split(":")[-1])
-    update_teacher_class(teacher_id, None)
+    school_id = get_school_id_for_admin(callback.from_user.id)
+    update_teacher_class(teacher_id, None, school_id)
     await callback.answer("Класс снят.")
-    await _show_teacher_card(callback.message, teacher_id)
+    await _show_teacher_card(callback.message, teacher_id, callback.from_user.id)
 
 
 @admin_router.callback_query(F.data.startswith("admin:chrole:"))
@@ -400,9 +423,10 @@ async def set_role(callback: CallbackQuery) -> None:
     parts = callback.data.split(":")
     teacher_id = int(parts[2])
     new_role = parts[3]
-    update_teacher_role(teacher_id, new_role)
+    school_id = get_school_id_for_admin(callback.from_user.id)
+    update_teacher_role(teacher_id, new_role, school_id)
     await callback.answer("Роль изменена.")
-    await _show_teacher_card(callback.message, teacher_id)
+    await _show_teacher_card(callback.message, teacher_id, callback.from_user.id)
 
 
 @admin_router.callback_query(F.data.startswith("admin:setclass:"))
@@ -410,7 +434,8 @@ async def set_class_menu(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         return
     teacher_id = int(callback.data.split(":")[-1])
-    classes = get_all_classes()
+    school_id = get_school_id_for_admin(callback.from_user.id)
+    classes = get_all_classes(school_id)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         *[
             [InlineKeyboardButton(
@@ -432,9 +457,10 @@ async def assign_class(callback: CallbackQuery) -> None:
     parts = callback.data.split(":")
     teacher_id = int(parts[2])
     class_id = int(parts[3])
-    update_teacher_class(teacher_id, class_id)
+    school_id = get_school_id_for_admin(callback.from_user.id)
+    update_teacher_class(teacher_id, class_id, school_id)
     await callback.answer("Класс назначен.")
-    await _show_teacher_card(callback.message, teacher_id)
+    await _show_teacher_card(callback.message, teacher_id, callback.from_user.id)
 
 
 # ===== Ученики с пагинацией =====
@@ -447,7 +473,9 @@ async def students_menu(message: Message) -> None:
 
 
 async def _show_classes_for_students(target: Message, edit: bool = False) -> None:
-    classes = get_all_classes()
+    user_id = target.from_user.id
+    school_id = get_school_id_for_admin(user_id)
+    classes = get_all_classes(school_id)
     if not classes:
         text = "Нет классов в базе."
         kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -470,7 +498,7 @@ async def show_students(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         return
     class_id = int(callback.data.split(":")[-1])
-    await _show_student_page(callback.message, class_id, page=1)
+    await _show_student_page(callback.message, class_id, page=1, user_id=callback.from_user.id)
     await callback.answer()
 
 
@@ -481,17 +509,20 @@ async def students_page_callback(callback: CallbackQuery) -> None:
     _, _, class_id_str, page_str = callback.data.split(":")
     class_id = int(class_id_str)
     page = int(page_str)
-    await _show_student_page(callback.message, class_id, page=page, edit=True)
+    await _show_student_page(callback.message, class_id, page=page, edit=True, user_id=callback.from_user.id)
     await callback.answer()
 
 
 async def _show_student_page(
-    message: Message, class_id: int, page: int = 1, edit: bool = False
+    message: Message, class_id: int, page: int = 1, edit: bool = False, user_id: int = None
 ) -> None:
-    students, total = get_students_by_class_paginated(class_id, page=page, per_page=STUDENTS_PER_PAGE)
+    if user_id is None:
+        user_id = message.from_user.id
+    school_id = get_school_id_for_admin(user_id)
+    students, total = get_students_by_class_paginated(class_id, page=page, per_page=STUDENTS_PER_PAGE, school_id=school_id)
     total_pages = max(1, ceil(total / STUDENTS_PER_PAGE))
 
-    classes = get_all_classes()
+    classes = get_all_classes(school_id)
     class_obj = next((c for c in classes if c.id == class_id), None)
     class_name = class_obj.name if class_obj else "?"
     text = f"🎓 Ученики класса {class_name} (всего {total}, стр. {page}/{total_pages}):"
@@ -551,10 +582,11 @@ async def process_student_name(message: Message, state: FSMContext) -> None:
         return
     data = await state.get_data()
     class_id = data["class_id"]
-    create_student(name=name, class_id=class_id)
+    school_id = get_school_id_for_admin(message.from_user.id)
+    create_student(name=name, class_id=class_id, school_id=school_id)
     await state.clear()
     await message.answer(f"✅ Ученик «{name}» добавлен.")
-    await _show_student_page(message, class_id, page=1)
+    await _show_student_page(message, class_id, page=1, user_id=message.from_user.id)
 
 
 @admin_router.callback_query(F.data.startswith("admin:delstudent:"))
@@ -579,9 +611,10 @@ async def delete_student_execute(callback: CallbackQuery) -> None:
     parts = callback.data.split(":")
     student_id = int(parts[2])
     class_id = int(parts[3])
-    delete_student(student_id)
+    school_id = get_school_id_for_admin(callback.from_user.id)
+    delete_student(student_id, school_id)
     await callback.answer("Ученик удалён.")
-    await _show_student_page(callback.message, class_id, page=1, edit=True)
+    await _show_student_page(callback.message, class_id, page=1, edit=True, user_id=callback.from_user.id)
 
 
 # ===== Школы =====
@@ -620,7 +653,6 @@ async def switch_school(callback: CallbackQuery) -> None:
 
     # Обновляем контекст только для этого администратора
     set_school_id_for_admin(callback.from_user.id, school_id)
-    set_current_school_id(school_id)  # fallback для репозиториев без явного school_id
 
     # Гарантируем, что у администратора есть Teacher-запись в новой школе
     ensure_admin_teacher(callback.from_user.id, school_id)
@@ -634,6 +666,47 @@ async def switch_school(callback: CallbackQuery) -> None:
         "Выберите действие:",
         reply_markup=build_menu_keyboard(callback.from_user.id),
     )
+    await callback.answer()
+
+# ===== Управление питанием для администратора =====
+
+@admin_router.message(F.text == BTN_ADMIN_MEAL)
+async def admin_meal_menu(message: Message):
+    if not is_admin(message.from_user.id):
+        return
+    school_id = get_school_id_for_admin(message.from_user.id)
+    classes = get_all_classes(school_id)
+    if not classes:
+        await message.answer("В вашей школе нет классов.")
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=c.name, callback_data=f"admin_meal_class:{c.id}")]
+        for c in classes
+    ] + [[InlineKeyboardButton(text="🔙 Назад в меню", callback_data="nav:menu")]])
+    await message.answer("Выберите класс для редактирования питания:", reply_markup=kb)
+
+
+@admin_router.callback_query(F.data.startswith("admin_meal_class:"))
+async def admin_meal_class_chosen(callback: CallbackQuery):
+    if not is_admin(callback.from_user.id):
+        return
+    class_id = int(callback.data.split(":")[-1])
+    school_id = get_school_id_for_admin(callback.from_user.id)
+
+    # Инициализируем состояние для администратора
+    chat_id = callback.message.chat.id
+    state = _get_state(chat_id)  # импортируем из meals
+    request = get_or_create_meal_request(class_id, school_id=school_id)
+    state['items'] = {item.student_id: item for item in request.items}
+    state['class_id'] = class_id
+    state['teacher_id'] = None  # админ
+    state['school_id'] = school_id
+    state['is_admin_mode'] = True
+
+    # Показываем форму редактирования
+    from handlers.meals import show_meal_markup
+    await show_meal_markup(callback.message, class_id, None, school_id, edit=True, is_admin_mode=True)
     await callback.answer()
 
 

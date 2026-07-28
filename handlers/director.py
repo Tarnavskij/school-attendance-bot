@@ -7,6 +7,7 @@ from services import ReportService
 from repositories import get_all_classes, get_absent_students_today
 from core.keyboards import BTN_SCHOOL_SUMMARY, BTN_DIRECTOR_CLASSES, start_kb, back_to_menu_btn
 from core.roles import check_access, Role
+from core.school_context import get_school_id_for_admin
 
 director_router = Router()
 
@@ -16,7 +17,7 @@ async def school_summary(message: Message) -> None:
     if not check_access(message.from_user.id, [Role.DIRECTOR]):
         await message.answer("Нет доступа.")
         return
-    summary = ReportService.get_daily_summary(date.today())
+    summary = ReportService.get_daily_summary(date.today())  # в сервисе агрегируется по всем школам
     await message.answer(summary, reply_markup=start_kb)
 
 
@@ -29,7 +30,19 @@ async def director_classes(message: Message) -> None:
 
 
 async def _show_class_list(target, edit: bool = False) -> None:
-    classes = get_all_classes()
+    # Определяем school_id: для директора он хранится в профиле, но у директора есть school_id в teacher
+    # Получаем учителя по telegram_id
+    from repositories import get_teacher_by_telegram_id
+    user_id = target.from_user.id if hasattr(target, 'from_user') else None
+    if user_id:
+        teacher = get_teacher_by_telegram_id(user_id)
+        school_id = teacher.school_id if teacher else get_school_id_for_admin(user_id)
+    else:
+        # fallback
+        from config import DEFAULT_SCHOOL_ID
+        school_id = DEFAULT_SCHOOL_ID
+
+    classes = get_all_classes(school_id)
     if not classes:
         text = "Нет классов в базе."
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_to_menu_btn()]])
@@ -65,7 +78,7 @@ async def view_class_absences(callback: CallbackQuery) -> None:
         await callback.answer("Нет доступа.", show_alert=True)
         return
     class_id = int(callback.data.split(":")[-1])
-    await _show_absent_readonly(callback.message, class_id)
+    await _show_absent_readonly(callback.message, class_id, callback.from_user.id)
     await callback.answer()
 
 
@@ -78,12 +91,18 @@ async def back_to_class_list(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-async def _show_absent_readonly(message: Message, class_id: int) -> None:
+async def _show_absent_readonly(message: Message, class_id: int, user_id: int) -> None:
     """Только просмотр: список отсутствующих сегодня в классе, без возможности менять причину."""
     today = date.today()
-    absent = get_absent_students_today(class_id, today)
 
-    classes = get_all_classes()
+    # Определяем school_id
+    from repositories import get_teacher_by_telegram_id
+    teacher = get_teacher_by_telegram_id(user_id)
+    school_id = teacher.school_id if teacher else get_school_id_for_admin(user_id)
+
+    absent = get_absent_students_today(class_id, today, school_id=school_id)
+
+    classes = get_all_classes(school_id)
     class_obj = next((c for c in classes if c.id == class_id), None)
     class_name = class_obj.name if class_obj else "?"
 

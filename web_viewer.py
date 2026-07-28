@@ -277,11 +277,9 @@ def requests_page():
 @app.route("/requests/<int:req_id>/approve", methods=["POST"])
 @require_auth
 def approve_request_web(req_id: int):
-    from core.school_context import set_current_school_id
     school_id = get_web_school_id()
-    set_current_school_id(school_id)
     from repositories import approve_request
-    success = approve_request(req_id)
+    success = approve_request(req_id, school_id)
     if success:
         _notify_subscribers("requests_update")
     return redirect(url_for("requests_page"))
@@ -290,11 +288,9 @@ def approve_request_web(req_id: int):
 @app.route("/requests/<int:req_id>/reject", methods=["POST"])
 @require_auth
 def reject_request_web(req_id: int):
-    from core.school_context import set_current_school_id
     school_id = get_web_school_id()
-    set_current_school_id(school_id)
     from repositories import reject_request
-    reject_request(req_id)
+    reject_request(req_id, school_id)
     _notify_subscribers("requests_update")
     return redirect(url_for("requests_page"))
 

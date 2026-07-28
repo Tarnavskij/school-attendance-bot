@@ -179,7 +179,15 @@ async def submit_attendance(callback: CallbackQuery, state: FSMContext) -> None:
         card_text = "\n".join(lines)
 
         # --- Уведомление классного руководителя ---
-        class_teacher = get_class_teacher_for_class(result.class_id)
+        # Получаем school_id из состояния
+        data = await state.get_data()
+        school_id = data.get("school_id")
+        if not school_id:
+            # fallback: берём из результата, но в result нет school_id, поэтому используем DEFAULT_SCHOOL_ID
+            from config import DEFAULT_SCHOOL_ID
+            school_id = DEFAULT_SCHOOL_ID
+
+        class_teacher = get_class_teacher_for_class(result.class_id, school_id)
         if class_teacher and class_teacher.telegram_id != callback.from_user.id:
             notify_lines = [f"📋 Перекличка в вашем классе {result.class_name} завершена."]
             if result.absent:

@@ -215,7 +215,11 @@ async def _proceed_after_school(
     callback: CallbackQuery, state: FSMContext, role: str
 ) -> None:
     if role == Role.CLASS_TEACHER:
-        classes = get_all_classes()
+        # Получаем school_id из данных состояния
+        data = await state.get_data()
+        school_id = data.get("school_id", 1)
+
+        classes = get_all_classes(school_id)
         if not classes:
             await callback.message.edit_text(
                 "В системе пока нет ни одного класса. "

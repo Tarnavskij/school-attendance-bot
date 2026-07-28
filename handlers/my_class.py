@@ -7,7 +7,8 @@ from repositories import get_teacher_by_telegram_id, get_all_classes, get_absent
 from core.keyboards import BTN_MY_CLASS, build_menu_keyboard, back_to_menu_btn
 from core.roles import check_access, is_admin, Role
 from core.constants import ABSENCE_REASONS
-from core.school_context import get_current_school_id
+from core.school_context import get_school_id_for_admin
+from config import DEFAULT_SCHOOL_ID
 
 my_class_router = Router()
 
@@ -20,7 +21,8 @@ async def my_class_handler(message: Message) -> None:
         return
 
     if is_admin(user_id):
-        classes = get_all_classes()
+        school_id = get_school_id_for_admin(user_id)
+        classes = get_all_classes(school_id)
         if not classes:
             await message.answer("Нет доступных классов.")
             return
@@ -100,9 +102,9 @@ async def apply_reason(callback: CallbackQuery) -> None:
 def _get_school_id(user_id: int) -> int:
     """Возвращает school_id: для админа глобальный, для учителя из профиля."""
     if is_admin(user_id):
-        return get_current_school_id()
+        return get_school_id_for_admin(user_id)
     teacher = get_teacher_by_telegram_id(user_id)
-    return teacher.school_id if teacher else get_current_school_id()
+    return teacher.school_id if teacher else DEFAULT_SCHOOL_ID
 
 
 def _build_class_grid_keyboard(classes, callback_prefix: str) -> InlineKeyboardMarkup:
@@ -122,7 +124,7 @@ async def _show_absent_list(message: Message, class_id: int, school_id: int, edi
     today = date.today()
     absent = get_absent_students_today(class_id, today, school_id=school_id)
 
-    classes = get_all_classes(school_id=school_id)
+    classes = get_all_classes(school_id)
     class_obj = next((c for c in classes if c.id == class_id), None)
     class_name = class_obj.name if class_obj else "?"
 

@@ -18,6 +18,7 @@ from repositories import (
 meals_router = Router()
 
 
+# Вспомогательные функции, доступные извне
 def _meal_type_emoji(meal_type: str) -> str:
     return "💰" if meal_type == "paid" else "🆓"
 
@@ -35,26 +36,12 @@ async def _notify_chefs_for_class(bot: Bot, class_id: int, school_id: int):
             pass
 
 
-@meals_router.message(F.text == BTN_MEAL)
-async def meal_menu(message: Message):
-    user_id = message.from_user.id
-    if not check_access(user_id, [Role.CLASS_TEACHER]):
-        return
-
-    teacher = get_teacher_by_telegram_id(user_id)
-    if is_admin(user_id):
-        await message.answer("Выберите класс (функция для администратора пока не реализована).")
-        return
-
-    if not teacher or not teacher.class_id:
-        await message.answer("У вас не указан класс. Обратитесь к администратору.")
-        return
-
-    await _show_meal_markup(message, teacher.class_id, teacher.id, teacher.school_id, edit=False)
-
-
-async def _show_meal_markup(target, class_id: int, teacher_id: int, school_id: int, edit: bool = False):
-    """Показывает список учеников с кнопками 'ест/не ест' и сменой типа питания."""
+async def show_meal_markup(target, class_id: int, teacher_id: int | None, school_id: int, edit: bool = False,
+                           is_admin_mode: bool = False):
+    """
+    Показывает список учеников с кнопками 'ест/не ест' и сменой типа питания.
+    Если teacher_id is None — режим администратора (без привязки к учителю).
+    """
     request = get_or_create_meal_request(class_id, school_id=school_id)
     if not request.items:
         text = "В классе нет учеников."
@@ -84,6 +71,8 @@ async def _show_meal_markup(target, class_id: int, teacher_id: int, school_id: i
     ])
 
     text = f"🍽️ Питание на {date.today().strftime('%d.%m.%Y')}\nКласс: {request.class_name}\n✅ — ест, ❌ — не ест"
+    if is_admin_mode:
+        text += "\n👑 Режим администратора"
 
     if edit:
         await target.edit_text(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
@@ -91,7 +80,9 @@ async def _show_meal_markup(target, class_id: int, teacher_id: int, school_id: i
         await target.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows))
 
 
+# Хранилище состояний для редактирования питания (используется и учителями, и админами)
 meal_states: dict[int, dict] = {}
+
 
 def _get_state(chat_id: int) -> dict:
     if chat_id not in meal_states:
@@ -99,20 +90,45 @@ def _get_state(chat_id: int) -> dict:
     return meal_states[chat_id]
 
 
+# --- Хендлеры для учителей ---
+
+@meals_router.message(F.text == BTN_MEAL)
+async def meal_menu(message: Message):
+    user_id = message.from_user.id
+    if not check_access(user_id, [Role.CLASS_TEACHER]):
+        return
+
+    teacher = get_teacher_by_telegram_id(user_id)
+    if is_admin(user_id):
+        await message.answer("Используйте кнопку 'Управление питанием' в меню администратора.")
+        return
+
+    if not teacher or not teacher.class_id:
+        await message.answer("У вас не указан класс. Обратитесь к администратору.")
+        return
+
+    await show_meal_markup(message, teacher.class_id, teacher.id, teacher.school_id, edit=False)
+
+
+# --- Общие callback-обработчики для учителей и администраторов ---
+
 @meals_router.callback_query(F.data.startswith("meal:toggle:"))
 async def toggle_eating(callback: CallbackQuery):
     student_id = int(callback.data.split(":")[-1])
     state = _get_state(callback.message.chat.id)
+
     if 'items' not in state:
+        # Если состояния нет, пытаемся восстановить из профиля (для учителя)
         teacher = get_teacher_by_telegram_id(callback.from_user.id)
         if not teacher or not teacher.class_id:
-            await callback.answer("Ошибка: нет класса.")
+            await callback.answer("Ошибка: не удалось определить класс.")
             return
         request = get_or_create_meal_request(teacher.class_id, school_id=teacher.school_id)
         state['items'] = {item.student_id: item for item in request.items}
         state['class_id'] = teacher.class_id
         state['teacher_id'] = teacher.id
         state['school_id'] = teacher.school_id
+        state['is_admin_mode'] = False
 
     item = state['items'].get(student_id)
     if item:
@@ -125,16 +141,18 @@ async def toggle_eating(callback: CallbackQuery):
 async def change_meal_type(callback: CallbackQuery):
     student_id = int(callback.data.split(":")[-1])
     state = _get_state(callback.message.chat.id)
+
     if 'items' not in state:
         teacher = get_teacher_by_telegram_id(callback.from_user.id)
         if not teacher or not teacher.class_id:
-            await callback.answer("Ошибка: нет класса.")
+            await callback.answer("Ошибка: не удалось определить класс.")
             return
         request = get_or_create_meal_request(teacher.class_id, school_id=teacher.school_id)
         state['items'] = {item.student_id: item for item in request.items}
         state['class_id'] = teacher.class_id
         state['teacher_id'] = teacher.id
         state['school_id'] = teacher.school_id
+        state['is_admin_mode'] = False
 
     item = state['items'].get(student_id)
     if item:
@@ -180,9 +198,16 @@ async def submit_meal(callback: CallbackQuery):
 
     items = list(state['items'].values())
     class_id = state['class_id']
-    teacher_id = state['teacher_id']
+    teacher_id = state.get('teacher_id')  # может быть None для админа
     school_id = state.get('school_id')
+    is_admin_mode = state.get('is_admin_mode', False)
+
     if not school_id:
+        if is_admin_mode:
+            # Если админ, но school_id не задан — ошибка
+            await callback.answer("Ошибка: школа не определена.")
+            return
+        # Для учителя пытаемся получить из профиля
         teacher = get_teacher_by_telegram_id(callback.from_user.id)
         school_id = teacher.school_id if teacher else None
         if not school_id:
@@ -192,11 +217,9 @@ async def submit_meal(callback: CallbackQuery):
     existed_before = is_meal_request_exists(class_id, date.today(), school_id)
     save_meal_request(class_id, teacher_id, items, school_id=school_id)
 
-    # Оповещаем шеф-поваров (бот)
     if existed_before:
         await _notify_chefs_for_class(callback.bot, class_id, school_id)
 
-    # Оповещаем веб-панель (SSE) – при любом сохранении
     notify = getattr(callback.bot, "notify_web", None)
     if notify:
         await notify("meals_update", {"school_id": school_id})
