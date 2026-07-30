@@ -16,6 +16,8 @@ from database import MealRequest, MealRequestItem, Student
 from config import DEFAULT_SCHOOL_ID, WEB_USERNAME, WEB_PASSWORD, FLASK_SECRET_KEY, SSE_PUBLISH_TOKEN
 from import_students import import_from_excel
 import threading
+import os
+import tempfile
 
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
@@ -336,15 +338,23 @@ def import_students_route(school_id: int):
     if not file or not file.filename.endswith(".xlsx"):
         return "Ошибка: нужен файл .xlsx", 400
 
-    import tempfile, os
+    # Сохраняем файл во временную папку
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         file.save(tmp.name)
         tmp_path = tmp.name
 
+    result = None
     try:
         result = import_from_excel(tmp_path, school_id)
+    except Exception as e:
+        # Если импорт упал, передаём ошибку в шаблон
+        result = {"error": str(e), "added": 0, "skipped": 0, "classes_created": 0}
     finally:
-        os.unlink(tmp_path)
+        # Пытаемся удалить временный файл, игнорируем ошибки доступа
+        try:
+            os.unlink(tmp_path)
+        except PermissionError:
+            pass  # файл занят, но данные уже прочитаны, удаление не критично
 
     schools = get_all_schools_data()
     school_name = next((s["name"] for s in schools if s["id"] == school_id), f"Школа {school_id}")

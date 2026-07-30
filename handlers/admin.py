@@ -14,7 +14,9 @@ from aiogram.fsm.context import FSMContext
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 
-from handlers.meals import _get_state
+# Импортируем новые FSM-компоненты из meals вместо _get_state
+from handlers.meals import MealStates, render_meal_keyboard
+
 from repositories import (
     delete_teacher, update_teacher_role, update_teacher_class,
     get_all_classes, get_students_by_class,
@@ -51,7 +53,7 @@ class AddStudentStates(StatesGroup):
 @admin_router.message(F.text == BTN_SCHOOL_SUMMARY, lambda msg: is_admin(msg.from_user.id))
 async def school_summary(message: Message) -> None:
     school_id = get_school_id_for_admin(message.from_user.id)
-    summary = ReportService.get_daily_summary(date.today())  # в сервисе уже агрегируется по всем школам
+    summary = ReportService.get_daily_summary(date.today())
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📥 Скачать Excel", callback_data="admin:excel")],
         [InlineKeyboardButton(text="🔴 Перезапуск переклички", callback_data="admin:reset_confirm")],
@@ -97,7 +99,6 @@ async def reset_confirm(callback: CallbackQuery) -> None:
 async def reset_cancel(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         return
-    # summary берётся без school_id (агрегированная)
     summary = ReportService.get_daily_summary(date.today())
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📥 Скачать Excel", callback_data="admin:excel")],
@@ -166,16 +167,8 @@ async def teachers_page_callback(callback: CallbackQuery) -> None:
 
 
 async def _show_teacher_page(target: Message, page: int = 1, edit: bool = False) -> None:
-    user_id = target.from_user.id if hasattr(target, 'from_user') else target.chat.id  # для callback используем chat.id
-    if hasattr(target, 'from_user'):
-        user_id = target.from_user.id
-    else:
-        # если target - message, берём из message.chat.id (но лучше использовать message.from_user.id)
-        # в реальности target всегда Message, поэтому корректно:
-        pass
-    # правильнее получать user_id из context, но в асинхронной функции проще передать отдельно
-    # переделаем вызов: будем передавать user_id отдельно
-    # пока оставим как было, но school_id получим из user_id
+    # Корректное получение user_id
+    user_id = target.from_user.id if hasattr(target, 'from_user') else target.chat.id
     school_id = get_school_id_for_admin(user_id)
     teachers, total = get_teachers_paginated(page=page, per_page=TEACHERS_PER_PAGE, school_id=school_id)
     total_pages = max(1, ceil(total / TEACHERS_PER_PAGE))
@@ -514,12 +507,13 @@ async def students_page_callback(callback: CallbackQuery) -> None:
 
 
 async def _show_student_page(
-    message: Message, class_id: int, page: int = 1, edit: bool = False, user_id: int = None
+        message: Message, class_id: int, page: int = 1, edit: bool = False, user_id: int = None
 ) -> None:
     if user_id is None:
         user_id = message.from_user.id
     school_id = get_school_id_for_admin(user_id)
-    students, total = get_students_by_class_paginated(class_id, page=page, per_page=STUDENTS_PER_PAGE, school_id=school_id)
+    students, total = get_students_by_class_paginated(class_id, page=page, per_page=STUDENTS_PER_PAGE,
+                                                      school_id=school_id)
     total_pages = max(1, ceil(total / STUDENTS_PER_PAGE))
 
     classes = get_all_classes(school_id)
@@ -651,10 +645,7 @@ async def switch_school(callback: CallbackQuery) -> None:
         return
     school_id = int(callback.data.split(":")[-1])
 
-    # Обновляем контекст только для этого администратора
     set_school_id_for_admin(callback.from_user.id, school_id)
-
-    # Гарантируем, что у администратора есть Teacher-запись в новой школе
     ensure_admin_teacher(callback.from_user.id, school_id)
 
     schools = get_all_schools()
@@ -668,7 +659,8 @@ async def switch_school(callback: CallbackQuery) -> None:
     )
     await callback.answer()
 
-# ===== Управление питанием для администратора =====
+
+# ===== Управление питанием для администратора (ИСПРАВЛЕНО) =====
 
 @admin_router.message(F.text == BTN_ADMIN_MEAL)
 async def admin_meal_menu(message: Message):
@@ -681,32 +673,37 @@ async def admin_meal_menu(message: Message):
         return
 
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=c.name, callback_data=f"admin_meal_class:{c.id}")]
-        for c in classes
-    ] + [[InlineKeyboardButton(text="🔙 Назад в меню", callback_data="nav:menu")]])
+                                                  [InlineKeyboardButton(text=c.name,
+                                                                        callback_data=f"admin_meal_class:{c.id}")]
+                                                  for c in classes
+                                              ] + [[InlineKeyboardButton(text="🔙 Назад в меню",
+                                                                         callback_data="nav:menu")]])
     await message.answer("Выберите класс для редактирования питания:", reply_markup=kb)
 
 
 @admin_router.callback_query(F.data.startswith("admin_meal_class:"))
-async def admin_meal_class_chosen(callback: CallbackQuery):
+async def admin_meal_class_chosen(callback: CallbackQuery, state: FSMContext):
     if not is_admin(callback.from_user.id):
         return
     class_id = int(callback.data.split(":")[-1])
     school_id = get_school_id_for_admin(callback.from_user.id)
 
-    # Инициализируем состояние для администратора
-    chat_id = callback.message.chat.id
-    state = _get_state(chat_id)  # импортируем из meals
+    # Получаем данные и сохраняем их в FSM (вместо _get_state)
     request = get_or_create_meal_request(class_id, school_id=school_id)
-    state['items'] = {item.student_id: item for item in request.items}
-    state['class_id'] = class_id
-    state['teacher_id'] = None  # админ
-    state['school_id'] = school_id
-    state['is_admin_mode'] = True
+    items_dict = {item.student_id: item for item in request.items}
 
-    # Показываем форму редактирования
-    from handlers.meals import show_meal_markup
-    await show_meal_markup(callback.message, class_id, None, school_id, edit=True, is_admin_mode=True)
+    await state.update_data(
+        class_id=class_id,
+        teacher_id=None,  # админ
+        school_id=school_id,
+        class_name=request.class_name,
+        items=items_dict,
+        is_admin_mode=True
+    )
+    await state.set_state(MealStates.editing)
+
+    # Используем общую функцию рендера из meals.py
+    await render_meal_keyboard(callback, state, edit=True)
     await callback.answer()
 
 
