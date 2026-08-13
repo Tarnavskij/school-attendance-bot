@@ -56,12 +56,24 @@ def require_auth(f):
 
 
 def get_web_school_id() -> int:
-    return session.get("school_id", DEFAULT_SCHOOL_ID)
-
-
-def get_all_schools_data() -> list[dict]:
+    """Всегда возвращает ID первой (и единственной) школы в БД."""
     from repositories import get_all_schools
-    return get_all_schools()
+    schools = get_all_schools()
+    if schools:
+        return schools[0]["id"]
+    # Если школ нет — создаём дефолтную (это случится только при первом запуске)
+    from repositories import create_school
+    school = create_school("Основная школа")
+    return school["id"]
+
+
+def get_school_name(school_id: int) -> str:
+    from repositories import get_all_schools
+    schools = get_all_schools()
+    for s in schools:
+        if s["id"] == school_id:
+            return s["name"]
+    return "Школа"
 
 
 def _pending_count(school_id: int) -> int:
@@ -186,19 +198,11 @@ def api_requests():
 
 # ── Обычные страницы ─────────────────────────────────────────────────────────
 
-@app.route("/switch_school")
-@require_auth
-def switch_school():
-    school_id = request.args.get("school_id", DEFAULT_SCHOOL_ID, type=int)
-    session["school_id"] = school_id
-    _notify_subscribers("school_switch", {"school_id": school_id})
-    return redirect(request.referrer or url_for("index"))
-
-
 @app.route("/")
 @require_auth
 def index():
     school_id = get_web_school_id()
+    school_name = get_school_name(school_id)
     date_str = request.args.get("date", date.today().strftime("%Y-%m-%d"))
     raw_sessions = _load_sessions(date_str, school_id)
     rows = []
@@ -226,8 +230,8 @@ def index():
         "index.html", page="summary", data=rows,
         date=date_str, stats=stats,
         pending_count=_pending_count(school_id),
-        all_schools=get_all_schools_data(),
         current_school_id=school_id,
+        current_school_name=school_name,
         sse_token=sse_token,
     )
 
@@ -237,6 +241,7 @@ def index():
 def requests_page():
     from core.roles import ROLE_LABELS
     school_id = get_web_school_id()
+    school_name = get_school_name(school_id)
     db = SessionLocal()
     try:
         reqs = (
@@ -270,8 +275,8 @@ def requests_page():
     return render_template(
         "index.html", page="requests", requests=result,
         pending_count=_pending_count(school_id),
-        all_schools=get_all_schools_data(),
         current_school_id=school_id,
+        current_school_name=school_name,
         sse_token=sse_token,
     )
 
@@ -300,12 +305,17 @@ def reject_request_web(req_id: int):
 @app.route("/schools")
 @require_auth
 def schools_page():
-    schools = get_all_schools_data()
+    school_id = get_web_school_id()
+    school_name = get_school_name(school_id)
+    # Для отображения списка школ всё равно нужны все школы, но переключатель убран,
+    # поэтому передаём пустой список или только текущую школу (для информации)
+    schools = [{"id": school_id, "name": school_name}]  # или можно получить все, но не использовать в шаблоне
     return render_template(
         "index.html", page="schools", schools=schools,
-        pending_count=_pending_count(get_web_school_id()),
-        all_schools=schools,
-        current_school_id=get_web_school_id(),
+        pending_count=_pending_count(school_id),
+        all_schools=[],  # не используется
+        current_school_id=school_id,
+        current_school_name=school_name,
     )
 
 
@@ -323,48 +333,47 @@ def create_school_route():
 @app.route("/schools/<int:school_id>/import", methods=["GET", "POST"])
 @require_auth
 def import_students_route(school_id: int):
+    # Игнорируем переданный school_id, всегда используем текущую школу
+    current_school_id = get_web_school_id()
+    school_name = get_school_name(current_school_id)
+
     if request.method == "GET":
-        schools = get_all_schools_data()
-        school_name = next((s["name"] for s in schools if s["id"] == school_id), f"Школа {school_id}")
         return render_template(
             "index.html", page="import",
-            school_id=school_id, school_name=school_name,
-            pending_count=_pending_count(school_id),
-            all_schools=schools,
-            current_school_id=get_web_school_id(),
+            school_id=current_school_id, school_name=school_name,
+            pending_count=_pending_count(current_school_id),
+            all_schools=[],
+            current_school_id=current_school_id,
+            current_school_name=school_name,
         )
 
     file = request.files.get("file")
     if not file or not file.filename.endswith(".xlsx"):
         return "Ошибка: нужен файл .xlsx", 400
 
-    # Сохраняем файл во временную папку
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         file.save(tmp.name)
         tmp_path = tmp.name
 
     result = None
     try:
-        result = import_from_excel(tmp_path, school_id)
+        result = import_from_excel(tmp_path, current_school_id)
     except Exception as e:
-        # Если импорт упал, передаём ошибку в шаблон
         result = {"error": str(e), "added": 0, "skipped": 0, "classes_created": 0}
     finally:
-        # Пытаемся удалить временный файл, игнорируем ошибки доступа
         try:
             os.unlink(tmp_path)
         except PermissionError:
-            pass  # файл занят, но данные уже прочитаны, удаление не критично
+            pass
 
-    schools = get_all_schools_data()
-    school_name = next((s["name"] for s in schools if s["id"] == school_id), f"Школа {school_id}")
     return render_template(
         "index.html", page="import",
-        school_id=school_id, school_name=school_name,
+        school_id=current_school_id, school_name=school_name,
         result=result,
-        pending_count=_pending_count(school_id),
-        all_schools=schools,
-        current_school_id=get_web_school_id(),
+        pending_count=_pending_count(current_school_id),
+        all_schools=[],
+        current_school_id=current_school_id,
+        current_school_name=school_name,
     )
 
 
@@ -409,7 +418,7 @@ def download_excel():
     )
 
 
-# ── Питание (вспомогательные функции и маршруты) ─────────────────────────────
+# ── Питание ──────────────────────────────────────────────────────────────────
 
 def _load_meal_data(date_str: str, school_id: int):
     db = SessionLocal()
@@ -505,6 +514,7 @@ def api_meals_class():
 @require_auth
 def meals_page():
     school_id = get_web_school_id()
+    school_name = get_school_name(school_id)
     date_str = request.args.get("date", date.today().strftime("%Y-%m-%d"))
     rows, stats = _load_meal_data(date_str, school_id)
     sse_token = _generate_sse_token()
@@ -513,8 +523,9 @@ def meals_page():
         meals_data=rows, meal_stats=stats,
         date=date_str,
         pending_count=_pending_count(school_id),
-        all_schools=get_all_schools_data(),
+        all_schools=[],
         current_school_id=school_id,
+        current_school_name=school_name,
         sse_token=sse_token,
     )
 
@@ -529,7 +540,6 @@ def download_meal_excel():
     export_type = request.args.get("type", "short")
 
     wb = Workbook()
-    # Лист "Сводка"
     ws_summary = wb.active
     ws_summary.title = "Сводка"
     headers = ["Класс", "Всего", "Платно", "Бесплатно", "Учитель"]

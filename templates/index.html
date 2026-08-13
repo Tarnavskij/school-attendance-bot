@@ -37,11 +37,14 @@
     padding: 6px 14px; border-radius: 20px; transition: all 0.2s;
   }
   .nav a:hover, .nav a.active { color: #fff; background: rgba(255,255,255,0.1); }
-  .nav select {
-    background: rgba(255,255,255,0.08);
-    border: 1px solid rgba(255,255,255,0.15);
-    border-radius: 12px; padding: 8px 14px;
-    color: #e8eaf6; font-size: 14px; outline: none; cursor: pointer;
+  .nav .school-name {
+    margin-left: auto;
+    color: rgba(255,255,255,0.6);
+    font-size: 14px;
+    font-weight: 500;
+    background: rgba(255,255,255,0.05);
+    padding: 6px 14px;
+    border-radius: 20px;
   }
   .container { max-width: 1100px; margin: 0 auto; padding: 32px 24px; }
   .page-title { font-size: 28px; font-weight: 700; margin-bottom: 24px; }
@@ -124,15 +127,7 @@
   </a>
   <a href="/meals" class="{{ 'active' if page == 'meals' }}">🍽️ Питание</a>
   <a href="/schools" class="{{ 'active' if page == 'schools' }}">🏫 Школы</a>
-  <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
-    <form method="get" action="/switch_school" style="margin:0;">
-      <select name="school_id" onchange="this.form.submit()">
-        {% for s in all_schools %}
-          <option value="{{ s.id }}" {% if s.id == current_school_id %}selected{% endif %}>{{ s.name }}</option>
-        {% endfor %}
-      </select>
-    </form>
-  </div>
+  <span class="school-name">🏫 {{ current_school_name }}</span>
 </nav>
 
 <div class="container">
@@ -380,7 +375,6 @@
   </div>
 
   <script>
-    // раскрытие детализации
     document.querySelectorAll('.meal-class-row').forEach(row => {
       row.addEventListener('click', async () => {
         const classId = row.dataset.classId;
@@ -414,7 +408,6 @@
       });
     });
 
-    // SSE обновление
     const mealsSource = new EventSource('/stream?token={{ sse_token }}');
     mealsSource.addEventListener('meals_update', async () => {
       try {
@@ -427,7 +420,6 @@
         console.error('Не удалось обновить питание', err);
       }
     });
-    // обновление при смене школы
     mealsSource.addEventListener('school_switch', async () => {
       try {
         const params = new URLSearchParams(window.location.search);
@@ -468,7 +460,6 @@
           <tr><th>Класс</th><th>Всего</th><th>Платно</th><th>Бесплатно</th><th>Учитель</th></tr>
           ${rows}
         </table>`;
-        // заново вешаем обработчики клика
         document.querySelectorAll('.meal-class-row').forEach(row => {
           row.addEventListener('click', async () => {
             const classId = row.dataset.classId;
