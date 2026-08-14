@@ -152,10 +152,11 @@ async def process_surname(message: Message, state: FSMContext) -> None:
         [InlineKeyboardButton(text="👨‍🏫 Классный руководитель", callback_data="reg:role:class_teacher")],
         [InlineKeyboardButton(text="🧑‍🏫 Учитель-предметник",   callback_data="reg:role:subject_teacher")],
         [InlineKeyboardButton(text="🗂 Секретарь",               callback_data="reg:role:secretary")],
+        [InlineKeyboardButton(text="🏫 Директор",                callback_data="reg:role:director")],
+        [InlineKeyboardButton(text="🍳 Шеф-повар",               callback_data="reg:role:chef")],
         [InlineKeyboardButton(text="❌ Отменить регистрацию",    callback_data="reg:cancel")],
     ])
     await message.answer("Шаг 2 из 3 — выберите вашу роль:", reply_markup=kb)
-
 
 # ── Отмена через inline-кнопку ────────────────────────────────────────────────
 
@@ -260,30 +261,29 @@ async def _proceed_after_school(
         await state.clear()
 
 
-@registration_router.callback_query(RegistrationStates.choosing_class, F.data.startswith("reg:class:"))
-async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
-    class_id = int(callback.data.split(":")[-1])
-    data = await state.get_data()
-    school_id = data.get("school_id", 1)
+@registration_router.callback_query(RegistrationStates.choosing_role, F.data.startswith("reg:role:"))
+async def role_chosen(callback: CallbackQuery, state: FSMContext) -> None:
+    role = callback.data.split(":")[-1]
+    # Разрешаем все роли, кроме ADMIN
+    if role not in (Role.CLASS_TEACHER, Role.SUBJECT_TEACHER, Role.SECRETARY, Role.DIRECTOR, Role.CHEF):
+        await callback.answer("Неверный выбор, попробуйте ещё раз.", show_alert=True)
+        return
 
+    await state.update_data(role=role)
     await callback.answer()
-    saved = await _save_and_notify(
-        callback.from_user.id, state, callback.bot, class_id=class_id, school_id=school_id
-    )
-    if saved:
-        await callback.message.edit_text(
-            "✅ Заявка отправлена администратору. Как только он её рассмотрит, "
-            "вы получите уведомление и сможете начать работу.",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="nav:menu")]
-            ]),
-        )
+
+    schools = get_all_schools()
+    if len(schools) > 1:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=s["name"], callback_data=f"reg:school:{s['id']}")]
+            for s in schools
+        ] + [[InlineKeyboardButton(text="❌ Отменить регистрацию", callback_data="reg:cancel")]])
+        await state.set_state(RegistrationStates.choosing_school)
+        await callback.message.edit_text("Шаг 3 из 3 — выберите вашу школу:", reply_markup=kb)
     else:
-        await callback.message.edit_text(
-            "Вы уже подали заявку и она ожидает рассмотрения. "
-            "Как только администратор примет решение, вы получите доступ.",
-        )
-    await state.clear()
+        school_id = schools[0]["id"] if schools else 1
+        await state.update_data(school_id=school_id)
+        await _proceed_after_school(callback, state, role)
 
 
 # ── Сохранение заявки и уведомление администратора ───────────────────────────
