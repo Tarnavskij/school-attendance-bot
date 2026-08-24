@@ -154,7 +154,8 @@ def _build_excel(sessions, date_str: str) -> bytes:
 async def teacher_list(message: Message) -> None:
     if not is_admin(message.from_user.id):
         return
-    await _show_teacher_page(message, page=1)
+    user_id = message.from_user.id
+    await _show_teacher_page(target=message, page=1, user_id=user_id)
 
 
 @admin_router.callback_query(F.data.startswith("admin:teachers_page:"))
@@ -162,17 +163,22 @@ async def teachers_page_callback(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         return
     page = int(callback.data.split(":")[-1])
-    await _show_teacher_page(callback.message, page=page, edit=True)
+    user_id = callback.from_user.id
+    await _show_teacher_page(target=callback.message, page=page, user_id=user_id, edit=True)
     await callback.answer()
 
 
-async def _show_teacher_page(target: Message, page: int = 1, edit: bool = False) -> None:
-    # Корректное получение user_id
-    user_id = target.from_user.id if hasattr(target, 'from_user') else target.chat.id
+async def _show_teacher_page(target: Message, page: int, user_id: int, edit: bool = False) -> None:
     school_id = get_school_id_for_admin(user_id)
     teachers, total = get_teachers_paginated(page=page, per_page=TEACHERS_PER_PAGE, school_id=school_id)
     total_pages = max(1, ceil(total / TEACHERS_PER_PAGE))
-    text = f"👨‍🏫 Управление пользователями (страница {page}/{total_pages}):"
+
+    # Если на странице нет учителей — показываем сообщение
+    if not teachers:
+        text = f"👨‍🏫 Управление пользователями (страница {page}/{total_pages})\n\nНа этой странице нет пользователей."
+    else:
+        text = f"👨‍🏫 Управление пользователями (страница {page}/{total_pages}):"
+
     kb = _teacher_list_keyboard(teachers, page, total_pages)
     if edit:
         await target.edit_text(text, reply_markup=kb)

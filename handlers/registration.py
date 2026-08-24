@@ -14,7 +14,7 @@ from repositories import (
     has_pending_request,
 )
 from core.keyboards import BTN_REQUEST_ACCESS, access_request_kb
-from config import ADMIN_TELEGRAM_ID
+from config import ADMIN_TELEGRAM_ID, DEFAULT_SCHOOL_ID
 from core.roles import ROLE_LABELS, Role
 from database import SessionLocal, RegistrationRequest
 
@@ -52,7 +52,7 @@ class RegistrationStates(StatesGroup):
     waiting_name = State()
     waiting_surname = State()
     choosing_role = State()
-    choosing_school = State()
+    # choosing_school = State()  # Удалено — школа всегда одна
     choosing_class = State()
 
 
@@ -75,12 +75,11 @@ async def cancel_on_command(message: Message, state: FSMContext) -> None:
 
 
 # Для шагов с выбором через inline-кнопки команды тоже должны отменять процесс.
-# Поскольку choosing_school и choosing_class ожидают callback, а не текст,
-# перехватываем любое текстовое сообщение в этих состояниях.
-@registration_router.message(RegistrationStates.choosing_school)
+# Поскольку choosing_class ожидает callback, а не текст,
+# перехватываем любое текстовое сообщение в этом состоянии.
 @registration_router.message(RegistrationStates.choosing_class)
 async def cancel_on_text_during_inline(message: Message, state: FSMContext) -> None:
-    """Любой текст (включая команды) во время выбора школы/класса — отмена."""
+    """Любой текст (включая команды) во время выбора класса — отмена."""
     await _cancel_registration(message, state)
 
 
@@ -95,17 +94,13 @@ async def start_registration(message: Message, state: FSMContext) -> None:
         await message.answer("Вы уже зарегистрированы. Нажмите /menu.")
         return
 
-    # Незакрытая заявка существует — проверяем по всем школам (школа одна в 99% случаев)
-    # и используем school_id=1 как дефолт, потому что на этом этапе школа ещё не выбрана.
-    # Полная проверка по конкретной школе будет повторена перед сохранением.
-    schools = get_all_schools()
-    for school in schools:
-        if has_pending_request(user_id, school["id"]):
-            await message.answer(
-                "Вы уже подали заявку и она ожидает рассмотрения. "
-                "Как только администратор примет решение, вы получите доступ."
-            )
-            return
+    # Проверяем, есть ли незакрытая заявка (для единственной школы)
+    if has_pending_request(user_id, DEFAULT_SCHOOL_ID):
+        await message.answer(
+            "Вы уже подали заявку и она ожидает рассмотрения. "
+            "Как только администратор примет решение, вы получите доступ."
+        )
+        return
 
     # Сбрасываем возможное «зависшее» FSM-состояние от предыдущей попытки
     await state.clear()
@@ -130,7 +125,7 @@ async def process_name(message: Message, state: FSMContext) -> None:
     await state.update_data(name=raw)
     await state.set_state(RegistrationStates.waiting_surname)
     await message.answer(
-        "Шаг 1 из 3 — теперь введите вашу <b>фамилию</b> (только буквы, от 2 до 30 символов).",
+        "Шаг 2 из 3 — теперь введите вашу <b>фамилию</b> (только буквы, от 2 до 30 символов).",
         parse_mode="HTML",
     )
 
@@ -156,7 +151,7 @@ async def process_surname(message: Message, state: FSMContext) -> None:
         [InlineKeyboardButton(text="🍳 Шеф-повар",               callback_data="reg:role:chef")],
         [InlineKeyboardButton(text="❌ Отменить регистрацию",    callback_data="reg:cancel")],
     ])
-    await message.answer("Шаг 2 из 3 — выберите вашу роль:", reply_markup=kb)
+    await message.answer("Шаг 3 из 3 — выберите вашу роль:", reply_markup=kb)
 
 
 # ── Отмена через inline-кнопку ────────────────────────────────────────────────
@@ -172,7 +167,7 @@ async def cancel_inline(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
-# ── Шаг 3а: выбор роли ───────────────────────────────────────────────────────
+# ── Шаг 3: выбор роли ───────────────────────────────────────────────────────
 
 @registration_router.callback_query(RegistrationStates.choosing_role, F.data.startswith("reg:role:"))
 async def role_chosen(callback: CallbackQuery, state: FSMContext) -> None:
@@ -183,43 +178,19 @@ async def role_chosen(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     await state.update_data(role=role)
-    await callback.answer()
-
-    schools = get_all_schools()
-    if len(schools) > 1:
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=s["name"], callback_data=f"reg:school:{s['id']}")]
-            for s in schools
-        ] + [[InlineKeyboardButton(text="❌ Отменить регистрацию", callback_data="reg:cancel")]])
-        await state.set_state(RegistrationStates.choosing_school)
-        await callback.message.edit_text("Шаг 3 из 3 — выберите вашу школу:", reply_markup=kb)
-    else:
-        school_id = schools[0]["id"] if schools else 1
-        await state.update_data(school_id=school_id)
-        await _proceed_after_school(callback, state, role)
-
-
-# ── Шаг 3б: выбор школы (если их несколько) ──────────────────────────────────
-
-@registration_router.callback_query(RegistrationStates.choosing_school, F.data.startswith("reg:school:"))
-async def school_chosen(callback: CallbackQuery, state: FSMContext) -> None:
-    school_id = int(callback.data.split(":")[-1])
-    await state.update_data(school_id=school_id)
-    data = await state.get_data()
-    role = data.get("role", Role.SUBJECT_TEACHER)
+    # Школа всегда одна — используем DEFAULT_SCHOOL_ID
+    await state.update_data(school_id=DEFAULT_SCHOOL_ID)
     await callback.answer()
     await _proceed_after_school(callback, state, role)
 
 
-# ── Шаг 3в: выбор класса (только для классного руководителя) ─────────────────
+# ── Шаг 3 (продолжение): выбор класса (только для классного руководителя) ───
 
 async def _proceed_after_school(
     callback: CallbackQuery, state: FSMContext, role: str
 ) -> None:
     if role == Role.CLASS_TEACHER:
-        # Получаем school_id из данных состояния
-        data = await state.get_data()
-        school_id = data.get("school_id", 1)
+        school_id = DEFAULT_SCHOOL_ID  # всегда одна школа
 
         classes = get_all_classes(school_id)
         if not classes:
@@ -240,11 +211,9 @@ async def _proceed_after_school(
             reply_markup=kb,
         )
     else:
-        # Для остальных ролей класс не нужен (кроме классного руководителя)
-        data = await state.get_data()
-        school_id = data.get("school_id", 1)
+        # Для остальных ролей класс не нужен
         saved = await _save_and_notify(
-            callback.from_user.id, state, callback.bot, class_id=None, school_id=school_id
+            callback.from_user.id, state, callback.bot, class_id=None, school_id=DEFAULT_SCHOOL_ID
         )
         if saved:
             await callback.message.edit_text(
@@ -265,12 +234,9 @@ async def _proceed_after_school(
 @registration_router.callback_query(RegistrationStates.choosing_class, F.data.startswith("reg:class:"))
 async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
     class_id = int(callback.data.split(":")[-1])
-    data = await state.get_data()
-    school_id = data.get("school_id", 1)
-
     await callback.answer()
     saved = await _save_and_notify(
-        callback.from_user.id, state, callback.bot, class_id=class_id, school_id=school_id
+        callback.from_user.id, state, callback.bot, class_id=class_id, school_id=DEFAULT_SCHOOL_ID
     )
     if saved:
         await callback.message.edit_text(
@@ -301,7 +267,7 @@ async def _save_and_notify(
     Сохраняет заявку в базу и уведомляет администратора.
     Возвращает True при успехе, False если pending-заявка уже существует.
     """
-    # Финальная проверка на дубль прямо перед сохранением (защита от гонки)
+    # Финальная проверка на дубль прямо перед сохранением
     if has_pending_request(user_id, school_id):
         return False
 
@@ -320,6 +286,7 @@ async def _save_and_notify(
         finally:
             db.close()
 
+    # Получаем название школы (для уведомления)
     schools = get_all_schools()
     school_name = next((s["name"] for s in schools if s["id"] == school_id), "Неизвестная школа")
 

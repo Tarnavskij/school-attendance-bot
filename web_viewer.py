@@ -11,7 +11,7 @@ from flask import (
 )
 from markupsafe import escape
 from sqlalchemy.orm import joinedload
-from database import SessionLocal, AttendanceSession, AttendanceRecord, RegistrationRequest, Teacher, Class
+from database import SessionLocal, AttendanceSession, AttendanceRecord, RegistrationRequest, Teacher, Class, School
 from database import MealRequest, MealRequestItem, Student
 from config import DEFAULT_SCHOOL_ID, WEB_USERNAME, WEB_PASSWORD, FLASK_SECRET_KEY, SSE_PUBLISH_TOKEN
 from import_students import import_from_excel
@@ -195,6 +195,26 @@ def api_requests():
         db.close()
     return jsonify(result)
 
+@app.route("/api/school/stats")
+@require_auth
+def api_school_stats():
+    school_id = get_web_school_id()
+    db = SessionLocal()
+    try:
+        students_count = db.query(Student).filter(Student.school_id == school_id).count()
+        classes_count = db.query(Class).filter(Class.school_id == school_id).count()
+        teachers_count = db.query(Teacher).filter(
+            Teacher.school_id == school_id,
+            Teacher.is_active == True
+        ).count()
+        return jsonify({
+            "students": students_count,
+            "classes": classes_count,
+            "teachers": teachers_count,
+        })
+    finally:
+        db.close()
+
 
 # ── Обычные страницы ─────────────────────────────────────────────────────────
 
@@ -307,13 +327,9 @@ def reject_request_web(req_id: int):
 def schools_page():
     school_id = get_web_school_id()
     school_name = get_school_name(school_id)
-    # Для отображения списка школ всё равно нужны все школы, но переключатель убран,
-    # поэтому передаём пустой список или только текущую школу (для информации)
-    schools = [{"id": school_id, "name": school_name}]  # или можно получить все, но не использовать в шаблоне
     return render_template(
-        "index.html", page="schools", schools=schools,
+        "index.html", page="schools",
         pending_count=_pending_count(school_id),
-        all_schools=[],  # не используется
         current_school_id=school_id,
         current_school_name=school_name,
     )
@@ -328,6 +344,38 @@ def create_school_route():
         create_school(name)
         _notify_subscribers("schools_update")
     return redirect(url_for("schools_page"))
+
+
+def update_school_name(school_id: int, new_name: str) -> bool:
+    """Обновляет название школы в БД."""
+    db = SessionLocal()
+    try:
+        school = db.query(School).filter(School.id == school_id).first()
+        if not school:
+            return False
+        school.name = new_name
+        db.commit()
+        return True
+    finally:
+        db.close()
+
+
+@app.route("/schools/<int:school_id>/rename", methods=["POST"])
+@require_auth
+def rename_school(school_id: int):
+    new_name = request.form.get("name", "").strip()
+    if not new_name:
+        return jsonify({"error": "Название не может быть пустым"}), 400
+
+    current_id = get_web_school_id()
+    if school_id != current_id:
+        return jsonify({"error": "Неверная школа"}), 400
+
+    if update_school_name(current_id, new_name):
+        _notify_subscribers("schools_update")
+        return jsonify({"success": True, "name": new_name})
+    else:
+        return jsonify({"error": "Школа не найдена"}), 404
 
 
 @app.route("/schools/<int:school_id>/import", methods=["GET", "POST"])

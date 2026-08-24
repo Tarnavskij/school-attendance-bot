@@ -22,7 +22,7 @@ from logging_config import setup_logging
 from logger import get_logger
 from ensure_admin import ensure_admin
 
-# Настройка логирования
+# Настройка логирования ** source .venv/bin/activate ** python bot.py
 setup_logging()
 logger = get_logger(__name__)
 
