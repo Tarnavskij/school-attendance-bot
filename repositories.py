@@ -78,6 +78,19 @@ class SessionAlreadyExists(Exception):
 
 # ===== Учителя (требуют school_id) =====
 
+
+def get_default_school_id() -> int:
+    """Возвращает ID первой школы в БД. Если школ нет – создаёт дефолтную."""
+    with get_db() as db:
+        school = db.query(School).first()
+        if school:
+            return school.id
+        # Если школ нет – создаём (аналогично web_viewer.py)
+        new_school = School(name="Основная школа")
+        db.add(new_school)
+        db.commit()
+        return new_school.id
+
 def get_teacher_by_telegram_id(telegram_id: int) -> TeacherDTO | None:
     """Возвращает активного учителя в любой школе."""
     with get_db() as db:

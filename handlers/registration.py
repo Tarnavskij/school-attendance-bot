@@ -12,9 +12,10 @@ from repositories import (
     get_all_classes,
     get_all_schools,
     has_pending_request,
+    get_default_school_id,  # <-- импортировали функцию
 )
 from core.keyboards import BTN_REQUEST_ACCESS, access_request_kb
-from config import ADMIN_TELEGRAM_ID, DEFAULT_SCHOOL_ID
+from config import ADMIN_TELEGRAM_ID  # <-- убрали DEFAULT_SCHOOL_ID
 from core.roles import ROLE_LABELS, Role
 from database import SessionLocal, RegistrationRequest
 
@@ -95,7 +96,7 @@ async def start_registration(message: Message, state: FSMContext) -> None:
         return
 
     # Проверяем, есть ли незакрытая заявка (для единственной школы)
-    if has_pending_request(user_id, DEFAULT_SCHOOL_ID):
+    if has_pending_request(user_id, get_default_school_id()):
         await message.answer(
             "Вы уже подали заявку и она ожидает рассмотрения. "
             "Как только администратор примет решение, вы получите доступ."
@@ -178,8 +179,8 @@ async def role_chosen(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     await state.update_data(role=role)
-    # Школа всегда одна — используем DEFAULT_SCHOOL_ID
-    await state.update_data(school_id=DEFAULT_SCHOOL_ID)
+    # Школа всегда одна — получаем автоматически
+    await state.update_data(school_id=get_default_school_id())
     await callback.answer()
     await _proceed_after_school(callback, state, role)
 
@@ -190,7 +191,7 @@ async def _proceed_after_school(
     callback: CallbackQuery, state: FSMContext, role: str
 ) -> None:
     if role == Role.CLASS_TEACHER:
-        school_id = DEFAULT_SCHOOL_ID  # всегда одна школа
+        school_id = get_default_school_id()  # всегда одна школа
 
         classes = get_all_classes(school_id)
         if not classes:
@@ -213,7 +214,7 @@ async def _proceed_after_school(
     else:
         # Для остальных ролей класс не нужен
         saved = await _save_and_notify(
-            callback.from_user.id, state, callback.bot, class_id=None, school_id=DEFAULT_SCHOOL_ID
+            callback.from_user.id, state, callback.bot, class_id=None, school_id=get_default_school_id()
         )
         if saved:
             await callback.message.edit_text(
@@ -236,7 +237,7 @@ async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
     class_id = int(callback.data.split(":")[-1])
     await callback.answer()
     saved = await _save_and_notify(
-        callback.from_user.id, state, callback.bot, class_id=class_id, school_id=DEFAULT_SCHOOL_ID
+        callback.from_user.id, state, callback.bot, class_id=class_id, school_id=get_default_school_id()
     )
     if saved:
         await callback.message.edit_text(

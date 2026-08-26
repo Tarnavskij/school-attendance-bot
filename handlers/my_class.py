@@ -3,12 +3,18 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import date
 
-from repositories import get_teacher_by_telegram_id, get_all_classes, get_absent_students_today, set_absence_reason
+from repositories import (
+    get_teacher_by_telegram_id,
+    get_all_classes,
+    get_absent_students_today,
+    set_absence_reason,
+    get_default_school_id,  # <-- добавили импорт
+)
 from core.keyboards import BTN_MY_CLASS, build_menu_keyboard, back_to_menu_btn
 from core.roles import check_access, is_admin, Role
 from core.constants import ABSENCE_REASONS
 from core.school_context import get_school_id_for_admin
-from config import DEFAULT_SCHOOL_ID
+# from config import DEFAULT_SCHOOL_ID  # <-- убрали импорт
 
 my_class_router = Router()
 
@@ -104,7 +110,7 @@ def _get_school_id(user_id: int) -> int:
     if is_admin(user_id):
         return get_school_id_for_admin(user_id)
     teacher = get_teacher_by_telegram_id(user_id)
-    return teacher.school_id if teacher else DEFAULT_SCHOOL_ID
+    return teacher.school_id if teacher else get_default_school_id()  # <-- заменили DEFAULT_SCHOOL_ID
 
 
 def _build_class_grid_keyboard(classes, callback_prefix: str) -> InlineKeyboardMarkup:

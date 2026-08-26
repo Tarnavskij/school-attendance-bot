@@ -3,11 +3,16 @@ from aiogram import Router, F
 from aiogram.types import Message
 from datetime import date
 
-from repositories import is_school_done_today, get_absence_reason_counts, get_teacher_by_telegram_id
+from repositories import (
+    is_school_done_today,
+    get_absence_reason_counts,
+    get_teacher_by_telegram_id,
+    get_default_school_id,  # <-- добавили импорт
+)
 from core.keyboards import BTN_ROLL_STATUS
 from core.roles import check_access, Role
 from core.constants import ABSENCE_REASONS
-from config import DEFAULT_SCHOOL_ID
+# from config import DEFAULT_SCHOOL_ID  # <-- убрали импорт
 
 secretary_router = Router()
 
@@ -20,7 +25,7 @@ async def roll_status(message: Message) -> None:
 
     # Получаем school_id из профиля секретаря
     teacher = get_teacher_by_telegram_id(message.from_user.id)
-    school_id = teacher.school_id if teacher else DEFAULT_SCHOOL_ID
+    school_id = teacher.school_id if teacher else get_default_school_id()  # <-- заменили
 
     today = date.today()
 

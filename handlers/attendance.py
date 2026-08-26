@@ -7,9 +7,14 @@ from datetime import date
 
 from services import AttendanceService
 from repositories import (
-    get_available_classes, get_students_by_class,
-    get_session_records, get_session_result, delete_session,
-    get_teacher_by_telegram_id, get_class_teacher_for_class,
+    get_available_classes,
+    get_students_by_class,
+    get_session_records,
+    get_session_result,
+    delete_session,
+    get_teacher_by_telegram_id,
+    get_class_teacher_for_class,
+    get_default_school_id,  # <-- добавили импорт
 )
 from core.keyboards import BTN_START_ROLL, build_menu_keyboard
 from core.roles import check_access, Role, is_admin
@@ -183,9 +188,8 @@ async def submit_attendance(callback: CallbackQuery, state: FSMContext) -> None:
         data = await state.get_data()
         school_id = data.get("school_id")
         if not school_id:
-            # fallback: берём из результата, но в result нет school_id, поэтому используем DEFAULT_SCHOOL_ID
-            from config import DEFAULT_SCHOOL_ID
-            school_id = DEFAULT_SCHOOL_ID
+            # fallback: получаем ID первой школы
+            school_id = get_default_school_id()  # <-- заменили
 
         class_teacher = get_class_teacher_for_class(result.class_id, school_id)
         if class_teacher and class_teacher.telegram_id != callback.from_user.id:

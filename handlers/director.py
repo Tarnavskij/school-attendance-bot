@@ -4,7 +4,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from datetime import date
 
 from services import ReportService
-from repositories import get_all_classes, get_absent_students_today
+from repositories import get_all_classes, get_absent_students_today, get_default_school_id
 from core.keyboards import BTN_SCHOOL_SUMMARY, BTN_DIRECTOR_CLASSES, start_kb, back_to_menu_btn
 from core.roles import check_access, Role
 from core.school_context import get_school_id_for_admin
@@ -39,8 +39,7 @@ async def _show_class_list(target, edit: bool = False) -> None:
         school_id = teacher.school_id if teacher else get_school_id_for_admin(user_id)
     else:
         # fallback
-        from config import DEFAULT_SCHOOL_ID
-        school_id = DEFAULT_SCHOOL_ID
+        school_id = get_default_school_id()
 
     classes = get_all_classes(school_id)
     if not classes:

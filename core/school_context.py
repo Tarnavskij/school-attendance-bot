@@ -2,13 +2,13 @@
 """
 Контекст текущей школы — привязан к telegram_id администратора.
 """
-from config import DEFAULT_SCHOOL_ID
+from repositories import get_default_school_id
 
 _admin_school_map: dict[int, int] = {}
 
 def get_school_id_for_admin(telegram_id: int) -> int:
     """Возвращает ID активной школы для данного администратора."""
-    return _admin_school_map.get(telegram_id, DEFAULT_SCHOOL_ID)
+    return _admin_school_map.get(telegram_id, get_default_school_id())
 
 def set_school_id_for_admin(telegram_id: int, school_id: int) -> None:
     """Устанавливает ID активной школы для данного администратора."""
