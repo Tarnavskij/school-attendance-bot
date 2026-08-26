@@ -215,8 +215,9 @@
       <span style="background:#ff453a;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:4px;">{{ pending_count }}</span>
     {% endif %}
   </a>
-  <a href="/meals" class="{{ 'active' if page == 'meals' else '' }}">🍽️ Питание</a>
-  <a href="/schools" class="{{ 'active' if page == 'schools' else '' }}">📥 Импорт</a>
+<a href="/meals" class="{{ 'active' if page == 'meals' else '' }}">🍽️ Питание</a>
+<a href="/attendance" class="{{ 'active' if page == 'attendance' else '' }}">📅 График</a>
+<a href="/schools" class="{{ 'active' if page == 'schools' else '' }}">📥 Импорт</a>
   <span class="school-name" onclick="openSchoolCard()">🏫 {{ current_school_name }}</span>
 </nav>
 
