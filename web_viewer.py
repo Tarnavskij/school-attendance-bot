@@ -223,7 +223,6 @@ def api_school_stats():
 @app.route("/api/attendance_day")
 @require_auth
 def api_attendance_day():
-    """Возвращает для каждого сотрудника первый вход (DIRECTION=2) и последний выход (DIRECTION=1) за указанную дату."""
     date_str = request.args.get('date')
     if not date_str:
         date_str = date.today().strftime('%Y-%m-%d')
@@ -231,48 +230,65 @@ def api_attendance_day():
 
     db = SessionLocal()
     try:
+        # Получаем всех активных учителей с card_number
         teachers = db.query(Teacher).filter(
             Teacher.school_id == school_id,
-            Teacher.is_active == True
+            Teacher.is_active == True,
+            Teacher.card_number.isnot(None)
         ).all()
+
+        if not teachers:
+            return jsonify([])
+
+        # Собираем номера карт для запроса
+        cards = [t.card_number for t in teachers]
+        # Подключаемся к Sigur и получаем события за день для всех карт
+        try:
+            with get_sigur_connection() as conn:
+                with conn.cursor() as cur:
+                    # Запрос: для каждой карты находим access_object_id, затем MIN(LOGTIME) для входа (DIRECTION=2) и MAX(LOGTIME) для выхода (DIRECTION=1)
+                    # Делаем без фильтра ACCESS_OBJECT_TYPE_ID, чтобы не потерять события
+                    placeholders = ','.join(['%s'] * len(cards))
+                    sql = f"""
+                        SELECT 
+                            a.formatted_value AS card_number,
+                            MIN(CASE WHEN l.DIRECTION = 2 THEN l.LOGTIME END) AS first_entry,
+                            MAX(CASE WHEN l.DIRECTION = 1 THEN l.LOGTIME END) AS last_exit
+                        FROM tc-db-main.assigned_identifiers a
+                        LEFT JOIN tc-db-log.v_logs l ON a.access_object_id = l.EMPHINT
+                            AND DATE(l.LOGTIME) = %s
+                        WHERE a.type = 'CARD' 
+                          AND a.formatted_value IN ({placeholders})
+                        GROUP BY a.formatted_value
+                    """
+                    cur.execute(sql, (date_str, *cards))
+                    rows = cur.fetchall()
+                    # Создаём словарь card_number -> данные
+                    sigur_data = {row['card_number']: row for row in rows}
+        except Exception as e:
+            # Если ошибка подключения к Sigur, возвращаем пустой результат
+            return jsonify([])
 
         result = []
         for t in teachers:
-            if not t.card_number:
-                continue
-            try:
-                with get_sigur_connection() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            "SELECT access_object_id FROM tc-db-main.assigned_identifiers "
-                            "WHERE formatted_value = %s AND type = 'CARD' LIMIT 1",
-                            (t.card_number,)
-                        )
-                        row = cur.fetchone()
-                        if not row:
-                            continue
-                        emphint = row['access_object_id']
-                        cur.execute(
-                            """
-                            SELECT 
-                                MIN(CASE WHEN DIRECTION = 2 THEN LOGTIME END) AS first_entry,
-                                MAX(CASE WHEN DIRECTION = 1 THEN LOGTIME END) AS last_exit
-                            FROM tc-db-log.v_logs
-                            WHERE EMPHINT = %s AND ACCESS_OBJECT_TYPE_ID = 'EMP'
-                              AND DATE(LOGTIME) = %s
-                            """,
-                            (emphint, date_str)
-                        )
-                        row2 = cur.fetchone()
-                        result.append({
-                            'id': t.id,
-                            'name': t.name,
-                            'card_number': t.card_number,
-                            'first_entry': row2['first_entry'].isoformat() if row2 and row2['first_entry'] else None,
-                            'last_exit': row2['last_exit'].isoformat() if row2 and row2['last_exit'] else None,
-                        })
-            except Exception:
-                continue
+            data = sigur_data.get(t.card_number)
+            if data:
+                result.append({
+                    'id': t.id,
+                    'name': t.name,
+                    'card_number': t.card_number,
+                    'first_entry': data['first_entry'].isoformat() if data['first_entry'] else None,
+                    'last_exit': data['last_exit'].isoformat() if data['last_exit'] else None,
+                })
+            else:
+                # Если нет событий, всё равно добавляем с пустыми полями
+                result.append({
+                    'id': t.id,
+                    'name': t.name,
+                    'card_number': t.card_number,
+                    'first_entry': None,
+                    'last_exit': None,
+                })
         return jsonify(result)
     finally:
         db.close()
