@@ -1,20 +1,24 @@
 # sigur_reader.py
 import asyncio
+import os
 from datetime import datetime
 import pymysql
+from dotenv import load_dotenv
 from logger import get_logger
 from repositories import get_teacher_by_card_number, update_teacher_status
 from config import DEFAULT_SCHOOL_ID
 
+load_dotenv()
+
 logger = get_logger(__name__)
 
 # --- Конфигурация подключения к MariaDB Sigur ---
-# ЗАМЕНИТЕ ЭТИ ЗНАЧЕНИЯ НА СВОИ!
-SIGUR_DB_HOST = 'localhost'          # или IP-адрес сервера Sigur
-SIGUR_DB_PORT = 3305                 # порт из вашего sphinx.ini
-SIGUR_DB_USER = 'ваш_логин'          # логин (скорее всего root)
-SIGUR_DB_PASSWORD = 'ваш_пароль'     # пароль
-SIGUR_DB_NAME = 'tc-db-log'          # база с логами
+SIGUR_DB_HOST = os.getenv('SIGUR_DB_HOST', 'localhost')
+SIGUR_DB_PORT = int(os.getenv('SIGUR_DB_PORT', 3305))
+SIGUR_DB_USER = os.getenv('SIGUR_DB_USER', 'root')
+SIGUR_DB_PASSWORD = os.getenv('SIGUR_DB_PASSWORD', '')
+SIGUR_DB_NAME = os.getenv('SIGUR_DB_NAME', 'tc-db-log')
+
 
 def get_sigur_connection():
     """Возвращает соединение с MariaDB."""
@@ -27,6 +31,7 @@ def get_sigur_connection():
         charset='utf8mb4',
         cursorclass=pymysql.cursors.DictCursor
     )
+
 
 def fetch_new_events(last_time: datetime | None):
     """
@@ -55,6 +60,7 @@ def fetch_new_events(last_time: datetime | None):
                 cur.execute(sql, (last_time,))
             return cur.fetchall()
 
+
 def get_employee_info(emphint: int):
     """
     Возвращает (name, card_number) для сотрудника по EMPHINT.
@@ -76,6 +82,7 @@ def get_employee_info(emphint: int):
             row2 = cur.fetchone()
             card_number = row2['formatted_value'] if row2 else None
             return name, card_number
+
 
 class SigurWatcher:
     def __init__(self, callback):
