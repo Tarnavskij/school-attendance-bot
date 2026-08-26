@@ -1,4 +1,3 @@
-# web_viewer.py
 import io
 import functools
 import json
@@ -15,7 +14,6 @@ from database import SessionLocal, AttendanceSession, AttendanceRecord, Registra
 from database import MealRequest, MealRequestItem, Student
 from config import DEFAULT_SCHOOL_ID, WEB_USERNAME, WEB_PASSWORD, FLASK_SECRET_KEY, SSE_PUBLISH_TOKEN
 from import_students import import_from_excel
-# НОВОЕ: импорт для работы с Sigur
 from sigur_reader import get_sigur_connection
 import threading
 import os
@@ -30,7 +28,6 @@ subscribers_lock = threading.Lock()
 
 
 def _notify_subscribers(event: str, data: dict | None = None) -> None:
-    """Посылает событие всем текущим SSE‑подписчикам."""
     payload = f"event: {event}\ndata: {json.dumps(data or {})}\n\n"
     with subscribers_lock:
         for q in subscribers:
@@ -38,7 +35,6 @@ def _notify_subscribers(event: str, data: dict | None = None) -> None:
 
 
 # ── HTTP Basic Auth ───────────────────────────────────────────────────────────
-
 def check_auth(username: str, password: str) -> bool:
     return username == WEB_USERNAME and password == WEB_PASSWORD
 
@@ -54,11 +50,11 @@ def require_auth(f):
                 {"WWW-Authenticate": 'Basic realm="School Attendance"'},
             )
         return f(*args, **kwargs)
+
     return decorated
 
 
 def get_web_school_id() -> int:
-    """Всегда возвращает ID первой (и единственной) школы в БД."""
     from repositories import get_all_schools
     schools = get_all_schools()
     if schools:
@@ -218,7 +214,7 @@ def api_school_stats():
         db.close()
 
 
-# ── НОВЫЙ API ДЛЯ СТРАНИЦЫ "ГРАФИК" ──
+# ── НОВЫЙ API ДЛЯ СТРАНИЦЫ ГРАФИК (ФИНАЛЬНАЯ ВЕРСИЯ) ──
 
 @app.route("/api/attendance_day")
 @require_auth
@@ -230,14 +226,17 @@ def api_attendance_day():
     try:
         with get_sigur_connection() as conn:
             with conn.cursor() as cur:
-                # Получаем события за день с именами сотрудников
                 sql = """
                     SELECT 
                         l.LOGTIME,
                         p.NAME AS employee_name,
-                        l.DIRECTION
-                    FROM tc-db-log.v_logs l
-                    LEFT JOIN tc-db-main.personal p ON l.EMPHINT = p.ID
+                        CASE 
+                            WHEN l.DIRECTION = 1 THEN 'Выход'
+                            WHEN l.DIRECTION = 2 THEN 'Вход'
+                            ELSE 'Неизвестно'
+                        END AS direction_text
+                    FROM `tc-db-log`.`v_logs` l
+                    LEFT JOIN `tc-db-main`.`personal` p ON l.EMPHINT = p.ID
                     WHERE l.ACCESS_OBJECT_TYPE_ID = 'EMP'
                       AND DATE(l.LOGTIME) = %s
                     ORDER BY l.LOGTIME DESC
@@ -247,6 +246,7 @@ def api_attendance_day():
                 return jsonify(rows)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 # ── Обычные страницы ─────────────────────────────────────────────────────────
 
@@ -397,11 +397,9 @@ def rename_school(school_id: int):
     new_name = request.form.get("name", "").strip()
     if not new_name:
         return jsonify({"error": "Название не может быть пустым"}), 400
-
     current_id = get_web_school_id()
     if school_id != current_id:
         return jsonify({"error": "Неверная школа"}), 400
-
     if update_school_name(current_id, new_name):
         _notify_subscribers("schools_update")
         return jsonify({"success": True, "name": new_name})
@@ -414,7 +412,6 @@ def rename_school(school_id: int):
 def import_students_route(school_id: int):
     current_school_id = get_web_school_id()
     school_name = get_school_name(current_school_id)
-
     if request.method == "GET":
         return render_template(
             "index.html", page="import",
@@ -424,15 +421,12 @@ def import_students_route(school_id: int):
             current_school_id=current_school_id,
             current_school_name=school_name,
         )
-
     file = request.files.get("file")
     if not file or not file.filename.endswith(".xlsx"):
         return "Ошибка: нужен файл .xlsx", 400
-
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         file.save(tmp.name)
         tmp_path = tmp.name
-
     result = None
     try:
         result = import_from_excel(tmp_path, current_school_id)
@@ -443,7 +437,6 @@ def import_students_route(school_id: int):
             os.unlink(tmp_path)
         except PermissionError:
             pass
-
     return render_template(
         "index.html", page="import",
         school_id=current_school_id, school_name=school_name,
@@ -463,7 +456,6 @@ def download_excel():
     school_id = get_web_school_id()
     date_str = request.args.get("date", date.today().strftime("%Y-%m-%d"))
     raw_sessions = _load_sessions(date_str, school_id)
-
     wb = Workbook()
     ws = wb.active
     ws.title = f"Сводка {date_str}"
@@ -616,7 +608,6 @@ def download_meal_excel():
     school_id = get_web_school_id()
     date_str = request.args.get("date", date.today().strftime("%Y-%m-%d"))
     export_type = request.args.get("type", "short")
-
     wb = Workbook()
     ws_summary = wb.active
     ws_summary.title = "Сводка"
@@ -625,7 +616,6 @@ def download_meal_excel():
         cell = ws_summary.cell(row=1, column=col, value=h)
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal="center")
-
     rows_summary, _ = _load_meal_data(date_str, school_id)
     for row_data in rows_summary:
         ws_summary.append([
@@ -638,7 +628,6 @@ def download_meal_excel():
     for col in ws_summary.columns:
         width = max((len(str(cell.value or "")) for cell in col), default=10) + 2
         ws_summary.column_dimensions[col[0].column_letter].width = width
-
     if export_type == "full":
         ws_detail = wb.create_sheet("Детализация")
         detail_headers = ["Класс", "Ученик", "Тип питания", "Ест"]
@@ -660,7 +649,6 @@ def download_meal_excel():
         for col in ws_detail.columns:
             width = max((len(str(cell.value or "")) for cell in col), default=10) + 2
             ws_detail.column_dimensions[col[0].column_letter].width = width
-
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -730,7 +718,6 @@ def internal_publish():
     token = request.headers.get("X-SSE-Token") or request.args.get("token")
     if token != SSE_PUBLISH_TOKEN:
         return jsonify({"error": "unauthorized"}), 403
-
     payload = request.get_json(silent=True) or {}
     event = payload.get("event", "update")
     data = payload.get("data", {})
