@@ -23,15 +23,20 @@
             flex-wrap: wrap;
         }
         .nav-brand {
-            font-size: 18px; font-weight: 700;
+            font-size: 18px;
+            font-weight: 700;
             background: linear-gradient(135deg, #a78bfa, #60a5fa);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
         .nav a {
-            color: rgba(255,255,255,0.6); text-decoration: none;
-            font-size: 14px; font-weight: 500;
-            padding: 6px 14px; border-radius: 20px; transition: all 0.2s;
+            color: rgba(255,255,255,0.6);
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 500;
+            padding: 6px 14px;
+            border-radius: 20px;
+            transition: all 0.2s;
         }
         .nav a:hover, .nav a.active { color: #fff; background: rgba(255,255,255,0.1); }
         .nav .school-name {
@@ -103,17 +108,8 @@
         tr:hover td { background: rgba(255,255,255,0.03); }
         .empty { text-align: center; padding: 40px; color: rgba(255,255,255,0.3); }
         .time-cell { font-family: monospace; color: #60a5fa; }
-        .badge {
-            display: inline-block;
-            padding: 2px 10px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
-            background: rgba(52,199,89,0.15);
-            color: #34c759;
-            border: 1px solid rgba(52,199,89,0.3);
-        }
-        .badge-out { background: rgba(255,69,58,0.15); color: #ff453a; border-color: rgba(255,69,58,0.3); }
+        .direction-in { color: #34c759; }
+        .direction-out { color: #ff453a; }
     </style>
 </head>
 <body>
@@ -158,22 +154,23 @@
             const data = await resp.json();
             const container = document.getElementById('tableContainer');
             if (!data || data.length === 0) {
-                container.innerHTML = '<div class="empty">Нет данных за этот день</div>';
+                container.innerHTML = '<div class="empty">Нет событий за этот день</div>';
                 return;
             }
+            // data — список событий, каждое с LOGTIME, employee_name, direction_text
             let rows = data.map(item => `
                 <tr>
-                    <td><strong>${item.name}</strong></td>
-                    <td class="time-cell">${item.first_entry ? item.first_entry.slice(11,16) : '—'}</td>
-                    <td class="time-cell">${item.last_exit ? item.last_exit.slice(11,16) : '—'}</td>
+                    <td class="time-cell">${item.LOGTIME ? item.LOGTIME.slice(11,16) : '—'}</td>
+                    <td><strong>${item.employee_name || 'Неизвестно'}</strong></td>
+                    <td class="${item.direction_text === 'Вход' ? 'direction-in' : 'direction-out'}">${item.direction_text || 'Неизвестно'}</td>
                 </tr>
             `).join('');
             container.innerHTML = `
                 <table>
                     <tr>
+                        <th>Время</th>
                         <th>Сотрудник</th>
-                        <th>Первый вход</th>
-                        <th>Последний выход</th>
+                        <th>Направление</th>
                     </tr>
                     ${rows}
                 </table>
