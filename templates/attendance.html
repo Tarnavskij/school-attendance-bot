@@ -157,10 +157,9 @@
                 container.innerHTML = '<div class="empty">Нет событий за этот день</div>';
                 return;
             }
-            // data — список событий, каждое с LOGTIME, employee_name, direction_text
             let rows = data.map(item => `
                 <tr>
-                    <td class="time-cell">${item.LOGTIME ? item.LOGTIME.slice(11,16) : '—'}</td>
+                    <td class="time-cell">${item.LOGTIME ? new Date(item.LOGTIME).toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'}) : '—'}</td>
                     <td><strong>${item.employee_name || 'Неизвестно'}</strong></td>
                     <td class="${item.direction_text === 'Вход' ? 'direction-in' : 'direction-out'}">${item.direction_text || 'Неизвестно'}</td>
                 </tr>
