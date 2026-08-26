@@ -15,6 +15,8 @@ from database import SessionLocal, AttendanceSession, AttendanceRecord, Registra
 from database import MealRequest, MealRequestItem, Student
 from config import DEFAULT_SCHOOL_ID, WEB_USERNAME, WEB_PASSWORD, FLASK_SECRET_KEY, SSE_PUBLISH_TOKEN
 from import_students import import_from_excel
+# НОВОЕ: импорт для работы с Sigur
+from sigur_reader import get_sigur_connection
 import threading
 import os
 import tempfile
@@ -61,7 +63,6 @@ def get_web_school_id() -> int:
     schools = get_all_schools()
     if schools:
         return schools[0]["id"]
-    # Если школ нет — создаём дефолтную (это случится только при первом запуске)
     from repositories import create_school
     school = create_school("Основная школа")
     return school["id"]
@@ -195,6 +196,7 @@ def api_requests():
         db.close()
     return jsonify(result)
 
+
 @app.route("/api/school/stats")
 @require_auth
 def api_school_stats():
@@ -212,6 +214,66 @@ def api_school_stats():
             "classes": classes_count,
             "teachers": teachers_count,
         })
+    finally:
+        db.close()
+
+
+# ── НОВЫЙ API ДЛЯ СТРАНИЦЫ "ГРАФИК" ──
+
+@app.route("/api/attendance_day")
+@require_auth
+def api_attendance_day():
+    """Возвращает для каждого сотрудника первый вход (DIRECTION=2) и последний выход (DIRECTION=1) за указанную дату."""
+    date_str = request.args.get('date')
+    if not date_str:
+        date_str = date.today().strftime('%Y-%m-%d')
+    school_id = get_web_school_id()
+
+    db = SessionLocal()
+    try:
+        teachers = db.query(Teacher).filter(
+            Teacher.school_id == school_id,
+            Teacher.is_active == True
+        ).all()
+
+        result = []
+        for t in teachers:
+            if not t.card_number:
+                continue
+            try:
+                with get_sigur_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "SELECT access_object_id FROM tc-db-main.assigned_identifiers "
+                            "WHERE formatted_value = %s AND type = 'CARD' LIMIT 1",
+                            (t.card_number,)
+                        )
+                        row = cur.fetchone()
+                        if not row:
+                            continue
+                        emphint = row['access_object_id']
+                        cur.execute(
+                            """
+                            SELECT 
+                                MIN(CASE WHEN DIRECTION = 2 THEN LOGTIME END) AS first_entry,
+                                MAX(CASE WHEN DIRECTION = 1 THEN LOGTIME END) AS last_exit
+                            FROM tc-db-log.v_logs
+                            WHERE EMPHINT = %s AND ACCESS_OBJECT_TYPE_ID = 'EMP'
+                              AND DATE(LOGTIME) = %s
+                            """,
+                            (emphint, date_str)
+                        )
+                        row2 = cur.fetchone()
+                        result.append({
+                            'id': t.id,
+                            'name': t.name,
+                            'card_number': t.card_number,
+                            'first_entry': row2['first_entry'].isoformat() if row2 and row2['first_entry'] else None,
+                            'last_exit': row2['last_exit'].isoformat() if row2 and row2['last_exit'] else None,
+                        })
+            except Exception:
+                continue
+        return jsonify(result)
     finally:
         db.close()
 
@@ -347,7 +409,6 @@ def create_school_route():
 
 
 def update_school_name(school_id: int, new_name: str) -> bool:
-    """Обновляет название школы в БД."""
     db = SessionLocal()
     try:
         school = db.query(School).filter(School.id == school_id).first()
@@ -381,7 +442,6 @@ def rename_school(school_id: int):
 @app.route("/schools/<int:school_id>/import", methods=["GET", "POST"])
 @require_auth
 def import_students_route(school_id: int):
-    # Игнорируем переданный school_id, всегда используем текущую школу
     current_school_id = get_web_school_id()
     school_name = get_school_name(current_school_id)
 
@@ -639,6 +699,26 @@ def download_meal_excel():
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         as_attachment=True,
         download_name=f"meals_{date_str}.xlsx",
+    )
+
+
+# ── НОВАЯ СТРАНИЦА "ГРАФИК" ──
+
+@app.route("/attendance")
+@require_auth
+def attendance_page():
+    school_id = get_web_school_id()
+    school_name = get_school_name(school_id)
+    sse_token = _generate_sse_token()
+    today = date.today().strftime('%Y-%m-%d')
+    return render_template(
+        "attendance.html",
+        page="attendance",
+        pending_count=_pending_count(school_id),
+        current_school_id=school_id,
+        current_school_name=school_name,
+        sse_token=sse_token,
+        today=today
     )
 
 

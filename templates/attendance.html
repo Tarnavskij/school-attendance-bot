@@ -1,10 +1,193 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
-  <meta charset="UTF-8">
-  <title>$Title$</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>График посещаемости</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            min-height: 100vh;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
+            color: #e8eaf6;
+        }
+        .nav {
+            background: rgba(255,255,255,0.05);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            padding: 16px 32px;
+            display: flex;
+            align-items: center;
+            gap: 32px;
+            flex-wrap: wrap;
+        }
+        .nav-brand {
+            font-size: 18px; font-weight: 700;
+            background: linear-gradient(135deg, #a78bfa, #60a5fa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .nav a {
+            color: rgba(255,255,255,0.6); text-decoration: none;
+            font-size: 14px; font-weight: 500;
+            padding: 6px 14px; border-radius: 20px; transition: all 0.2s;
+        }
+        .nav a:hover, .nav a.active { color: #fff; background: rgba(255,255,255,0.1); }
+        .nav .school-name {
+            margin-left: auto;
+            color: rgba(255,255,255,0.6);
+            font-size: 14px;
+            font-weight: 500;
+            background: rgba(255,255,255,0.05);
+            padding: 6px 14px;
+            border-radius: 20px;
+        }
+        .container { max-width: 1100px; margin: 0 auto; padding: 32px 24px; }
+        .page-title { font-size: 28px; font-weight: 700; margin-bottom: 24px; }
+        .glass {
+            background: rgba(255,255,255,0.07);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 20px;
+            padding: 24px;
+            margin-bottom: 20px;
+        }
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+        input[type="date"] {
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 12px;
+            padding: 10px 16px;
+            color: #e8eaf6;
+            font-size: 14px;
+            outline: none;
+        }
+        .btn {
+            padding: 10px 20px;
+            border-radius: 12px;
+            font-size: 14px;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+            background: linear-gradient(135deg, #a78bfa, #60a5fa);
+            color: #fff;
+            transition: opacity 0.2s;
+        }
+        .btn:hover { opacity: 0.85; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        th {
+            text-align: left;
+            padding: 12px 16px;
+            color: rgba(255,255,255,0.4);
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+        }
+        td {
+            padding: 14px 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.85);
+        }
+        tr:hover td { background: rgba(255,255,255,0.03); }
+        .empty { text-align: center; padding: 40px; color: rgba(255,255,255,0.3); }
+        .time-cell { font-family: monospace; color: #60a5fa; }
+        .badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            background: rgba(52,199,89,0.15);
+            color: #34c759;
+            border: 1px solid rgba(52,199,89,0.3);
+        }
+        .badge-out { background: rgba(255,69,58,0.15); color: #ff453a; border-color: rgba(255,69,58,0.3); }
+    </style>
 </head>
 <body>
-$END$
+<nav class="nav">
+    <div class="nav-brand">🏫 Перекличка</div>
+    <a href="/">📊 Сводка</a>
+    <a href="/requests">📩 Заявки</a>
+    <a href="/meals">🍽️ Питание</a>
+    <a href="/attendance" class="active">📅 График</a>
+    <span class="school-name">🏫 {{ current_school_name }}</span>
+</nav>
+
+<div class="container">
+    <div class="page-title">📅 График посещаемости</div>
+
+    <div class="glass">
+        <div class="toolbar">
+            <input type="date" id="datePicker" value="{{ today }}">
+            <button class="btn" onclick="loadData()">Показать</button>
+            <span style="color:rgba(255,255,255,0.3); font-size:13px; margin-left:10px;">
+                🔄 обновляется автоматически
+            </span>
+        </div>
+    </div>
+
+    <div class="glass" id="tableContainer">
+        <div class="empty">Загрузка...</div>
+    </div>
+</div>
+
+<script>
+    const sse = new EventSource('/stream?token={{ sse_token }}');
+    sse.addEventListener('attendance_update', () => {
+        loadData();
+    });
+
+    async function loadData() {
+        const date = document.getElementById('datePicker').value;
+        if (!date) return;
+        try {
+            const resp = await fetch(`/api/attendance_day?date=${date}`);
+            const data = await resp.json();
+            const container = document.getElementById('tableContainer');
+            if (!data || data.length === 0) {
+                container.innerHTML = '<div class="empty">Нет данных за этот день</div>';
+                return;
+            }
+            let rows = data.map(item => `
+                <tr>
+                    <td><strong>${item.name}</strong></td>
+                    <td class="time-cell">${item.first_entry ? item.first_entry.slice(11,16) : '—'}</td>
+                    <td class="time-cell">${item.last_exit ? item.last_exit.slice(11,16) : '—'}</td>
+                </tr>
+            `).join('');
+            container.innerHTML = `
+                <table>
+                    <tr>
+                        <th>Сотрудник</th>
+                        <th>Первый вход</th>
+                        <th>Последний выход</th>
+                    </tr>
+                    ${rows}
+                </table>
+            `;
+        } catch (err) {
+            console.error('Ошибка загрузки:', err);
+        }
+    }
+
+    // Загрузка при открытии
+    loadData();
+
+    // Автообновление при изменении даты
+    document.getElementById('datePicker').addEventListener('change', loadData);
+</script>
 </body>
 </html>

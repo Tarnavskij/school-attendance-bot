@@ -42,6 +42,10 @@ class Teacher(Base):
     class_id = Column(Integer, ForeignKey("classes.id", ondelete="SET NULL"), nullable=True)
     school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, default=1)
 
+    # НОВОЕ: поля для интеграции с СКУД Sigur
+    card_number = Column(String(50), nullable=True, index=True)
+    is_inside = Column(Boolean, nullable=False, default=False)
+
     class_ = relationship("Class", back_populates="teacher")
     school = relationship("School", back_populates="teachers")
     sessions = relationship(
@@ -78,7 +82,7 @@ class Student(Base):
     name = Column(String(255), nullable=False)
     class_id = Column(Integer, ForeignKey("classes.id", ondelete="CASCADE"), nullable=False, index=True)
     school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, default=1)
-    meal_type = Column(String(10), default="paid", nullable=False)  # "paid" или "free"
+    meal_type = Column(String(10), default="paid", nullable=False)
 
     class_ = relationship("Class", back_populates="students")
     school = relationship("School", back_populates="students")
@@ -148,7 +152,7 @@ class RegistrationRequest(Base):
     school = relationship("School", back_populates="registration_requests")
 
 
-# ===== Новые таблицы: питание =====
+# ===== Таблицы питания =====
 
 class MealRequest(Base):
     __tablename__ = "meal_requests"
@@ -175,7 +179,7 @@ class MealRequestItem(Base):
     request_id = Column(Integer, ForeignKey("meal_requests.id", ondelete="CASCADE"), nullable=False, index=True)
     student_id = Column(Integer, ForeignKey("students.id", ondelete="CASCADE"), nullable=False, index=True)
     is_eating = Column(Boolean, default=True, nullable=False)
-    meal_type = Column(String(10), default="paid", nullable=False)  # "paid" или "free"
+    meal_type = Column(String(10), default="paid", nullable=False)
 
     request = relationship("MealRequest", back_populates="items")
     student = relationship("Student", back_populates="meal_items")

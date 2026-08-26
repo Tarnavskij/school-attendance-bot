@@ -5,7 +5,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from config import BOT_TOKEN, SSE_PUBLISH_TOKEN, MEAL_DEADLINE_HOUR, MEAL_DEADLINE_MINUTE, ADMIN_TELEGRAM_ID
+from config import BOT_TOKEN, SSE_PUBLISH_TOKEN, MEAL_DEADLINE_HOUR, MEAL_DEADLINE_MINUTE, ADMIN_TELEGRAM_ID, DEFAULT_SCHOOL_ID
 from services import ReportService
 from handlers.common import common_router
 from handlers.registration import registration_router
@@ -17,12 +17,17 @@ from handlers.secretary import secretary_router
 from handlers.chef import chef_router
 from handlers.meals import meals_router
 
+# НОВОЕ: импорты для Sigur
+from sigur_reader import SigurWatcher
+from repositories import get_teacher_by_card_number, update_teacher_status
+from datetime import datetime
+
 # Новая система логирования
 from logging_config import setup_logging
 from logger import get_logger
 from ensure_admin import ensure_admin
 
-# Настройка логирования ** source .venv/bin/activate ** python bot.py
+# Настройка логирования
 setup_logging()
 logger = get_logger(__name__)
 
@@ -102,14 +107,12 @@ async def main() -> None:
     # Глобальный обработчик ошибок
     @dp.errors()
     async def error_handler(update, exception):
-        # Логируем полный стектрейс
         logger.error(
             "Ошибка в боте",
             exc_info=exception,
             update=update,
         )
-        # Уведомляем администратора (с ограничением частоты)
-        update_repr = str(update)[:200]  # обрезаем, чтобы не было слишком длинно
+        update_repr = str(update)[:200]
         await notify_admin_error(bot, str(exception), update_repr)
         return True
 
@@ -125,6 +128,35 @@ async def main() -> None:
 
     # Кладём функцию уведомления прямо в объект бота
     bot.notify_web = notify_web_panel
+
+    # --- НОВОЕ: Интеграция с Sigur ---
+    async def handle_sigur_event(event: dict):
+        card_number = event.get('card_number')
+        direction = event.get('DIRECTION')
+        if not card_number or direction is None:
+            return
+
+        school_id = DEFAULT_SCHOOL_ID
+        teacher = get_teacher_by_card_number(card_number, school_id)
+        if not teacher:
+            logger.info(f"Неизвестная карта {card_number} (сотрудник {event.get('employee_name')})")
+            return
+
+        is_inside = (direction == 2)   # 2 = вход, 1 = выход
+        update_teacher_status(teacher.id, is_inside)
+        logger.info(f"Обновлён статус {teacher.name}: {'внутри' if is_inside else 'снаружи'} (карта {card_number})")
+
+        await notify_web_panel('attendance_update', {
+            'teacher_id': teacher.id,
+            'name': teacher.name,
+            'is_inside': is_inside,
+            'card_number': card_number,
+            'timestamp': event['LOGTIME'].isoformat()
+        })
+
+    watcher = SigurWatcher(handle_sigur_event)
+    asyncio.create_task(watcher.run(interval=1.0))
+    # --- Конец интеграции ---
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(

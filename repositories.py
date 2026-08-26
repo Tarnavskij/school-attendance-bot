@@ -846,3 +846,32 @@ def ensure_admin_teacher(telegram_id: int, school_id: int) -> None:
                 school_id=school_id,
                 is_active=True,
             ))
+
+# ===== НОВОЕ: интеграция с СКУД Sigur =====
+
+def get_teacher_by_card_number(card_number: str, school_id: int) -> TeacherDTO | None:
+    """Ищет активного учителя по номеру карты в указанной школе."""
+    with get_db() as db:
+        t = db.query(Teacher).options(joinedload(Teacher.school)).filter(
+            Teacher.card_number == card_number,
+            Teacher.school_id == school_id,
+            Teacher.is_active == True
+        ).first()
+        if not t:
+            return None
+        return TeacherDTO(
+            id=t.id, telegram_id=t.telegram_id, name=t.name,
+            role=t.role, is_active=t.is_active,
+            school_id=t.school_id,
+            class_id=t.class_id,
+            class_name=t.class_.name if t.class_ else None,
+            school_name=t.school.name if t.school else None
+        )
+
+def update_teacher_status(teacher_id: int, is_inside: bool) -> None:
+    """Обновляет статус нахождения внутри школы."""
+    with get_db() as db:
+        t = db.query(Teacher).filter(Teacher.id == teacher_id).first()
+        if t:
+            t.is_inside = is_inside
+            db.commit()
