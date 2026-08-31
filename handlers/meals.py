@@ -17,6 +17,9 @@ from repositories import (
     get_class_meal_summary,
     is_meal_request_exists,
 )
+from logger import get_logger
+
+logger = get_logger(__name__)
 
 meals_router = Router()
 
@@ -40,8 +43,7 @@ async def _notify_chefs_with_summary(bot: Bot, school_id: int, summary_text: str
         try:
             await bot.send_message(chef_id, summary_text)
         except Exception as e:
-            from logger import get_logger
-            get_logger(__name__).warning(f"Не удалось уведомить шеф-повара {chef_id}: {e}")
+            logger.warning(f"Не удалось уведомить шеф-повара {chef_id}: {e}")
 
 
 async def render_meal_keyboard(target: Message | CallbackQuery, state: FSMContext, edit: bool = False):
@@ -156,6 +158,7 @@ async def submit_meal(callback: CallbackQuery, state: FSMContext):
         await callback.answer("Нет данных для отправки.", show_alert=True)
         return
 
+    # Первичное сохранение (нужно для создания/обновления заявки)
     items_list = list(items_dict.values())
     class_id = data["class_id"]
     teacher_id = data.get("teacher_id")
@@ -165,13 +168,17 @@ async def submit_meal(callback: CallbackQuery, state: FSMContext):
     existed_before = is_meal_request_exists(class_id, date.today(), school_id)
     save_meal_request(class_id, teacher_id, items_list, school_id=school_id)
 
-    # Если заявка обновляется, уведомляем шеф-поваров с актуальными данными из items_list
+    # Если заявка обновляется, уведомляем шеф-поваров с актуальными данными из БД
     if existed_before and not is_admin_mode:
-        total = len(items_list)
-        paid = sum(1 for item in items_list if item.meal_type == "paid")
+        # Заново получаем данные из БД, чтобы быть уверенными в актуальности
+        updated_request = get_or_create_meal_request(class_id, school_id=school_id)
+        updated_items = updated_request.items
+        total = len(updated_items)
+        paid = sum(1 for item in updated_items if item.meal_type == "paid")
         free = total - paid
-        class_name = data.get("class_name", "Класс")
+        class_name = updated_request.class_name
         summary_text = f"🔄 Обновление питания для {class_name}: всего {total} (платно {paid}, бесплатно {free})"
+        logger.info(f"Отправка уведомления шеф-повару: {summary_text}")
         await _notify_chefs_with_summary(callback.bot, school_id, summary_text)
 
     notify = getattr(callback.bot, "notify_web", None)
