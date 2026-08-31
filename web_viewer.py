@@ -499,6 +499,8 @@ def download_excel():
 def _load_meal_data(date_str: str, school_id: int):
     db = SessionLocal()
     try:
+        # Принудительно сбрасываем кеш сессии, чтобы получить свежие данные
+        db.expire_all()
         reqs = (
             db.query(MealRequest)
             .options(
@@ -513,6 +515,9 @@ def _load_meal_data(date_str: str, school_id: int):
             .order_by(MealRequest.class_id)
             .all()
         )
+        # Дополнительно обновляем каждый объект, чтобы подгрузить свежие данные
+        for req in reqs:
+            db.refresh(req)
         rows = []
         for req in reqs:
             total = len(req.items)
