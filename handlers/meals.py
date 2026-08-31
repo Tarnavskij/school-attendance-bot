@@ -23,7 +23,7 @@ meals_router = Router()
 
 # ── FSM Состояния ─────────────────────────────────────────────────────────────
 class MealStates(StatesGroup):
-    editing = State()  # Храним class_id, teacher_id, school_id, items, is_admin_mode
+    editing = State()
 
 
 # ── Вспомогательные функции ───────────────────────────────────────────────────
@@ -31,23 +31,20 @@ def _meal_type_emoji(meal_type: str) -> str:
     return "💰" if meal_type == "paid" else "🆓"
 
 
-async def _notify_chefs_for_class(bot: Bot, class_id: int, school_id: int):
-    """Отправляет сообщение всем шеф-поварам школы об обновлении заявки класса."""
+async def _notify_chefs_with_summary(bot: Bot, school_id: int, summary_text: str) -> None:
+    """Отправляет готовую сводку всем шеф-поварам школы."""
     chef_ids = get_chef_telegram_ids(school_id)
     if not chef_ids:
         return
-    summary = get_class_meal_summary(class_id, school_id)
     for chef_id in chef_ids:
         try:
-            await bot.send_message(chef_id, summary)
+            await bot.send_message(chef_id, summary_text)
         except Exception as e:
-            # Логируем ошибку вместо молчаливого игнорирования
             from logger import get_logger
             get_logger(__name__).warning(f"Не удалось уведомить шеф-повара {chef_id}: {e}")
 
 
 async def render_meal_keyboard(target: Message | CallbackQuery, state: FSMContext, edit: bool = False):
-    """Читает текущие данные из FSM и перерисовывает клавиатуру."""
     data = await state.get_data()
     items_dict = data.get("items", {})
     class_name = data.get("class_name", "Неизвестный класс")
@@ -66,7 +63,6 @@ async def render_meal_keyboard(target: Message | CallbackQuery, state: FSMContex
     for item in items_dict.values():
         eating_icon = "✅" if item.is_eating else "❌"
         type_icon = _meal_type_emoji(item.meal_type)
-
         toggle_btn = InlineKeyboardButton(
             text=f"{eating_icon} {item.name} ({type_icon})",
             callback_data=f"meal:toggle:{item.student_id}"
@@ -94,7 +90,7 @@ async def render_meal_keyboard(target: Message | CallbackQuery, state: FSMContex
         await target.answer(text, reply_markup=kb)
 
 
-# ── Хендлеры для учителей ─────────────────────────────────────────────────────
+# ── Хендлеры ──────────────────────────────────────────────────────────────────
 @meals_router.message(F.text == BTN_MEAL)
 async def meal_menu(message: Message, state: FSMContext):
     user_id = message.from_user.id
@@ -110,7 +106,6 @@ async def meal_menu(message: Message, state: FSMContext):
         await message.answer("У вас не указан класс. Обратитесь к администратору.")
         return
 
-    # Инициализируем состояние в FSM
     request = get_or_create_meal_request(teacher.class_id, school_id=teacher.school_id)
     items_dict = {item.student_id: item for item in request.items}
 
@@ -123,21 +118,17 @@ async def meal_menu(message: Message, state: FSMContext):
         is_admin_mode=False
     )
     await state.set_state(MealStates.editing)
-
     await render_meal_keyboard(message, state, edit=False)
 
 
-# ── Общие callback-обработчики (работают только в состоянии editing) ──────────
 @meals_router.callback_query(MealStates.editing, F.data.startswith("meal:toggle:"))
 async def toggle_eating(callback: CallbackQuery, state: FSMContext):
     student_id = int(callback.data.split(":")[-1])
     data = await state.get_data()
     items_dict = data.get("items", {})
-
     if student_id in items_dict:
         items_dict[student_id].is_eating = not items_dict[student_id].is_eating
         await state.update_data(items=items_dict)
-
     await render_meal_keyboard(callback, state, edit=True)
     await callback.answer()
 
@@ -147,16 +138,12 @@ async def change_meal_type(callback: CallbackQuery, state: FSMContext):
     student_id = int(callback.data.split(":")[-1])
     data = await state.get_data()
     items_dict = data.get("items", {})
-
     if student_id in items_dict:
         item = items_dict[student_id]
         new_type = "free" if item.meal_type == "paid" else "paid"
         item.meal_type = new_type
-
-        # Сохраняем предпочтения ученика в БД
         update_student_meal_type(student_id, new_type)
         await state.update_data(items=items_dict)
-
     await render_meal_keyboard(callback, state, edit=True)
     await callback.answer()
 
@@ -165,7 +152,6 @@ async def change_meal_type(callback: CallbackQuery, state: FSMContext):
 async def submit_meal(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
     items_dict = data.get("items", {})
-
     if not items_dict:
         await callback.answer("Нет данных для отправки.", show_alert=True)
         return
@@ -179,8 +165,14 @@ async def submit_meal(callback: CallbackQuery, state: FSMContext):
     existed_before = is_meal_request_exists(class_id, date.today(), school_id)
     save_meal_request(class_id, teacher_id, items_list, school_id=school_id)
 
+    # Если заявка обновляется, уведомляем шеф-поваров с актуальными данными из items_list
     if existed_before and not is_admin_mode:
-        await _notify_chefs_for_class(callback.bot, class_id, school_id)
+        total = len(items_list)
+        paid = sum(1 for item in items_list if item.meal_type == "paid")
+        free = total - paid
+        class_name = data.get("class_name", "Класс")
+        summary_text = f"🔄 Обновление питания для {class_name}: всего {total} (платно {paid}, бесплатно {free})"
+        await _notify_chefs_with_summary(callback.bot, school_id, summary_text)
 
     notify = getattr(callback.bot, "notify_web", None)
     if notify:
