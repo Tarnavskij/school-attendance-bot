@@ -500,7 +500,6 @@ def _load_meal_data(date_str: str, school_id: int):
     from sqlalchemy import text
     db = SessionLocal()
     try:
-        # Выполняем сырой SQL-запрос
         sql = text("""
             SELECT 
                 c.name AS class_name,
@@ -513,7 +512,7 @@ def _load_meal_data(date_str: str, school_id: int):
             LEFT JOIN meal_request_items mri ON mr.id = mri.request_id
             LEFT JOIN classes c ON mr.class_id = c.id
             LEFT JOIN teachers t ON mr.submitted_by_id = t.id
-            WHERE mr.request_date = :date_str
+            WHERE mr.request_date = CAST(:date_str AS date)
               AND mr.school_id = :school_id
             GROUP BY mr.class_id, c.name, t.name
             ORDER BY mr.class_id
