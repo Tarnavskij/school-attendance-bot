@@ -229,19 +229,27 @@ def api_attendance_day():
                 sql = """
                     SELECT 
                         p.NAME AS employee_name,
-                        DATE_FORMAT(MIN(CASE WHEN l.DIRECTION = 2 THEN l.LOGTIME END), '%%H:%%i') AS first_entry,
-                        DATE_FORMAT(MAX(CASE WHEN l.DIRECTION = 1 THEN l.LOGTIME END), '%%H:%%i') AS last_exit
+                        MIN(CASE WHEN l.DIRECTION = 2 THEN l.LOGTIME END) AS first_entry,
+                        MAX(CASE WHEN l.DIRECTION = 1 THEN l.LOGTIME END) AS last_exit
                     FROM `tc-db-log`.`v_logs` l
                     LEFT JOIN `tc-db-main`.`personal` p ON l.EMPHINT = p.ID
                     WHERE l.ACCESS_OBJECT_TYPE_ID = 'EMP'
                       AND DATE(l.LOGTIME) = %s
+                      AND l.DIRECTION IN (1, 2)
                     GROUP BY p.NAME
-                    HAVING first_entry IS NOT NULL OR last_exit IS NOT NULL
-                    ORDER BY p.NAME
                 """
                 cur.execute(sql, (date_str,))
                 rows = cur.fetchall()
-                return jsonify(rows)
+                result = []
+                for row in rows:
+                    if row['first_entry'] is None and row['last_exit'] is None:
+                        continue
+                    result.append({
+                        'employee_name': row['employee_name'] or 'Неизвестно',
+                        'first_entry': row['first_entry'].strftime('%H:%M') if row['first_entry'] else None,
+                        'last_exit': row['last_exit'].strftime('%H:%M') if row['last_exit'] else None,
+                    })
+                return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
