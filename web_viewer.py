@@ -228,7 +228,7 @@ def api_attendance_day():
             with conn.cursor() as cur:
                 sql = """
                     SELECT 
-                        l.LOGTIME,
+                        DATE_FORMAT(DATE_ADD(l.LOGTIME, INTERVAL 1 HOUR), '%%H:%%i') AS time_str,
                         p.NAME AS employee_name,
                         CASE 
                             WHEN l.DIRECTION = 1 THEN 'Выход'

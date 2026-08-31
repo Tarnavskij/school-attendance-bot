@@ -119,6 +119,7 @@
     <a href="/requests">📩 Заявки</a>
     <a href="/meals">🍽️ Питание</a>
     <a href="/attendance" class="active">📅 График</a>
+    <a href="/schools">📥 Импорт</a>
     <span class="school-name">🏫 {{ current_school_name }}</span>
 </nav>
 
@@ -159,7 +160,7 @@
             }
             let rows = data.map(item => `
                 <tr>
-                    <td class="time-cell">${item.LOGTIME ? new Date(item.LOGTIME).toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'}) : '—'}</td>
+                    <td class="time-cell">${item.time_str || '—'}</td>
                     <td><strong>${item.employee_name || 'Неизвестно'}</strong></td>
                     <td class="${item.direction_text === 'Вход' ? 'direction-in' : 'direction-out'}">${item.direction_text || 'Неизвестно'}</td>
                 </tr>
