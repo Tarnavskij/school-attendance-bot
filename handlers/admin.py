@@ -30,13 +30,14 @@ from repositories import (
 from services import ReportService
 from core.keyboards import (
     BTN_SCHOOL_SUMMARY, BTN_TEACHER_LIST, BTN_STUDENTS, BTN_SCHOOLS,
-    build_menu_keyboard, BTN_ADMIN_MEAL,
+    build_menu_keyboard, BTN_ADMIN_MEAL, BTN_ATTENDANCE_GRAPH,
 )
 from core.roles import is_admin, ALL_ROLES, ROLE_LABELS, Role
 from core.school_context import (
     set_school_id_for_admin, get_school_id_for_admin,
 )
 from config import ADMIN_TELEGRAM_ID
+from sigur_reader import get_sigur_connection
 
 admin_router = Router()
 
@@ -711,6 +712,50 @@ async def admin_meal_class_chosen(callback: CallbackQuery, state: FSMContext):
     # Используем общую функцию рендера из meals.py
     await render_meal_keyboard(callback, state, edit=True)
     await callback.answer()
+
+
+# ===== График посещаемости для администратора =====
+
+@admin_router.message(F.text == BTN_ATTENDANCE_GRAPH)
+async def admin_attendance_graph(message: Message) -> None:
+    if not is_admin(message.from_user.id):
+        return
+
+    today = date.today().strftime('%Y-%m-%d')
+
+    try:
+        with get_sigur_connection() as conn:
+            with conn.cursor() as cur:
+                sql = """
+                    SELECT 
+                        p.NAME AS employee_name,
+                        MIN(CASE WHEN l.DIRECTION = 2 THEN l.LOGTIME END) AS first_entry,
+                        MAX(CASE WHEN l.DIRECTION = 1 THEN l.LOGTIME END) AS last_exit
+                    FROM `tc-db-log`.`v_logs` l
+                    LEFT JOIN `tc-db-main`.`personal` p ON l.EMPHINT = p.ID
+                    WHERE l.ACCESS_OBJECT_TYPE_ID = 'EMP'
+                      AND DATE(l.LOGTIME) = %s
+                      AND l.DIRECTION IN (1, 2)
+                    GROUP BY p.NAME
+                """
+                cur.execute(sql, (today,))
+                rows = cur.fetchall()
+
+                if not rows:
+                    await message.answer("📅 За сегодня событий нет.")
+                    return
+
+                lines = [f"📅 График посещаемости за {today}:"]
+                for row in rows:
+                    name = row['employee_name'] or 'Неизвестно'
+                    first = row['first_entry'].strftime('%H:%M') if row['first_entry'] else '—'
+                    last = row['last_exit'].strftime('%H:%M') if row['last_exit'] else '—'
+                    lines.append(f"• {name}: вход {first}, выход {last}")
+
+                await message.answer("\n".join(lines))
+    except Exception as e:
+        await message.answer(f"⚠️ Ошибка при получении данных: {e}")
+
 
 
 @admin_router.message(Command("restore_admin"))
