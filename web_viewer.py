@@ -497,50 +497,48 @@ def download_excel():
 # ── Питание ──────────────────────────────────────────────────────────────────
 
 def _load_meal_data(date_str: str, school_id: int):
-    from sqlalchemy import text
     db = SessionLocal()
     try:
-        sql = text("""
-            SELECT 
-                c.name AS class_name,
-                mr.class_id,
-                COUNT(mri.id) AS total,
-                SUM(CASE WHEN mri.meal_type = 'paid' THEN 1 ELSE 0 END) AS paid,
-                SUM(CASE WHEN mri.meal_type = 'free' THEN 1 ELSE 0 END) AS free,
-                t.name AS teacher_name
-            FROM meal_requests mr
-            LEFT JOIN meal_request_items mri ON mr.id = mri.request_id
-            LEFT JOIN classes c ON mr.class_id = c.id
-            LEFT JOIN teachers t ON mr.submitted_by_id = t.id
-            WHERE mr.request_date = CAST(:date_str AS date)
-              AND mr.school_id = :school_id
-            GROUP BY mr.class_id, c.name, t.name
-            ORDER BY mr.class_id
-        """)
-        rows = db.execute(sql, {"date_str": date_str, "school_id": school_id}).fetchall()
-
-        result = []
-        for row in rows:
-            result.append({
-                "class_name": row.class_name,
-                "class_id": row.class_id,
-                "total": row.total,
-                "paid": row.paid or 0,
-                "free": row.free or 0,
-                "teacher": row.teacher_name or "—",
+        db.expire_all()
+        reqs = (
+            db.query(MealRequest)
+            .options(
+                joinedload(MealRequest.class_),
+                joinedload(MealRequest.submitted_by),
+                joinedload(MealRequest.items),
+            )
+            .filter(
+                MealRequest.school_id == school_id,
+                MealRequest.request_date == date_str,
+            )
+            .order_by(MealRequest.class_id)
+            .all()
+        )
+        for req in reqs:
+            db.refresh(req)
+        rows = []
+        for req in reqs:
+            total = len(req.items)
+            paid = sum(1 for i in req.items if i.meal_type == "paid")
+            free = total - paid
+            teacher_name = req.submitted_by.name if req.submitted_by else "—"
+            rows.append({
+                "class_name": req.class_.name,
+                "class_id": req.class_id,
+                "total": total,
+                "paid": paid,
+                "free": free,
+                "teacher": teacher_name,
             })
-
         stats = {
-            "total_classes": len(result),
-            "total_meals": sum(r["total"] for r in result),
-            "paid": sum(r["paid"] for r in result),
-            "free": sum(r["free"] for r in result),
-        } if result else None
-
-        return result, stats
+            "total_classes": len(reqs),
+            "total_meals": sum(r["total"] for r in rows),
+            "paid": sum(r["paid"] for r in rows),
+            "free": sum(r["free"] for r in rows),
+        } if rows else None
+        return rows, stats
     finally:
         db.close()
-
 
 def _load_class_meal_students(class_id: int, date_str: str, school_id: int):
     db = SessionLocal()
