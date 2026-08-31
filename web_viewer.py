@@ -228,18 +228,16 @@ def api_attendance_day():
             with conn.cursor() as cur:
                 sql = """
                     SELECT 
-                        DATE_FORMAT(l.LOGTIME, '%%H:%%i') AS time_str,
                         p.NAME AS employee_name,
-                        CASE 
-                            WHEN l.DIRECTION = 1 THEN 'Выход'
-                            WHEN l.DIRECTION = 2 THEN 'Вход'
-                            ELSE 'Неизвестно'
-                        END AS direction_text
+                        DATE_FORMAT(MIN(CASE WHEN l.DIRECTION = 2 THEN l.LOGTIME END), '%%H:%%i') AS first_entry,
+                        DATE_FORMAT(MAX(CASE WHEN l.DIRECTION = 1 THEN l.LOGTIME END), '%%H:%%i') AS last_exit
                     FROM `tc-db-log`.`v_logs` l
                     LEFT JOIN `tc-db-main`.`personal` p ON l.EMPHINT = p.ID
                     WHERE l.ACCESS_OBJECT_TYPE_ID = 'EMP'
                       AND DATE(l.LOGTIME) = %s
-                    ORDER BY l.LOGTIME DESC
+                    GROUP BY p.NAME
+                    HAVING first_entry IS NOT NULL OR last_exit IS NOT NULL
+                    ORDER BY p.NAME
                 """
                 cur.execute(sql, (date_str,))
                 rows = cur.fetchall()
