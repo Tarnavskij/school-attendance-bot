@@ -18,6 +18,8 @@ BTN_DIRECTOR_CLASSES = "🏫 Классы"
 BTN_ROLL_STATUS = "📋 Статус переклички"
 BTN_SCHOOLS = "🏫 Школы"
 BTN_ADMIN_MEAL = "🍽️ Управление питанием"    # для администратора
+# НОВАЯ КНОПКА ДЛЯ ДИРЕКТОРА
+BTN_ATTENDANCE_GRAPH = "📅 График"            # для директора
 
 # ── Reply keyboards ───────────────────────────────────────────────────────────
 
@@ -48,7 +50,11 @@ def build_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
 
     role = teacher.role
     if role == Role.DIRECTOR:
-        rows = [[KeyboardButton(text=BTN_SCHOOL_SUMMARY), KeyboardButton(text=BTN_DIRECTOR_CLASSES)]]
+        # Добавляем кнопку "График" для директора
+        rows = [
+            [KeyboardButton(text=BTN_SCHOOL_SUMMARY), KeyboardButton(text=BTN_DIRECTOR_CLASSES)],
+            [KeyboardButton(text=BTN_ATTENDANCE_GRAPH)],
+        ]
     elif role == Role.SUBJECT_TEACHER:
         rows = [[KeyboardButton(text=BTN_START_ROLL)]]
     elif role == Role.CLASS_TEACHER:

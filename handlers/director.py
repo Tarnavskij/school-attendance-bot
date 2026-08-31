@@ -5,9 +5,14 @@ from datetime import date
 
 from services import ReportService
 from repositories import get_all_classes, get_absent_students_today, get_default_school_id
-from core.keyboards import BTN_SCHOOL_SUMMARY, BTN_DIRECTOR_CLASSES, start_kb, back_to_menu_btn
+from core.keyboards import (
+    BTN_SCHOOL_SUMMARY, BTN_DIRECTOR_CLASSES, BTN_ATTENDANCE_GRAPH,
+    start_kb, back_to_menu_btn
+)
 from core.roles import check_access, Role
 from core.school_context import get_school_id_for_admin
+# Импорт для подключения к Sigur
+from sigur_reader import get_sigur_connection
 
 director_router = Router()
 
@@ -17,7 +22,7 @@ async def school_summary(message: Message) -> None:
     if not check_access(message.from_user.id, [Role.DIRECTOR]):
         await message.answer("Нет доступа.")
         return
-    summary = ReportService.get_daily_summary(date.today())  # в сервисе агрегируется по всем школам
+    summary = ReportService.get_daily_summary(date.today())
     await message.answer(summary, reply_markup=start_kb)
 
 
@@ -30,15 +35,12 @@ async def director_classes(message: Message) -> None:
 
 
 async def _show_class_list(target, edit: bool = False) -> None:
-    # Определяем school_id: для директора он хранится в профиле, но у директора есть school_id в teacher
-    # Получаем учителя по telegram_id
     from repositories import get_teacher_by_telegram_id
     user_id = target.from_user.id if hasattr(target, 'from_user') else None
     if user_id:
         teacher = get_teacher_by_telegram_id(user_id)
         school_id = teacher.school_id if teacher else get_school_id_for_admin(user_id)
     else:
-        # fallback
         school_id = get_default_school_id()
 
     classes = get_all_classes(school_id)
@@ -56,7 +58,6 @@ async def _show_class_list(target, edit: bool = False) -> None:
 
 
 def _build_class_grid_keyboard(classes, callback_prefix: str) -> InlineKeyboardMarkup:
-    """Группирует классы по параллелям и добавляет кнопку 'Назад'."""
     groups: dict[int, list] = {}
     for c in classes:
         grade = c.grade or 0
@@ -91,10 +92,7 @@ async def back_to_class_list(callback: CallbackQuery) -> None:
 
 
 async def _show_absent_readonly(message: Message, class_id: int, user_id: int) -> None:
-    """Только просмотр: список отсутствующих сегодня в классе, без возможности менять причину."""
     today = date.today()
-
-    # Определяем school_id
     from repositories import get_teacher_by_telegram_id
     teacher = get_teacher_by_telegram_id(user_id)
     school_id = teacher.school_id if teacher else get_school_id_for_admin(user_id)
@@ -120,3 +118,47 @@ async def _show_absent_readonly(message: Message, class_id: int, user_id: int) -
         text = "\n".join(lines)
 
     await message.edit_text(text, reply_markup=kb)
+
+
+# ===== НОВЫЙ ХЕНДЛЕР ДЛЯ КНОПКИ "ГРАФИК" =====
+
+@director_router.message(F.text == BTN_ATTENDANCE_GRAPH)
+async def attendance_graph(message: Message) -> None:
+    if not check_access(message.from_user.id, [Role.DIRECTOR]):
+        await message.answer("Нет доступа.")
+        return
+
+    today = date.today().strftime('%Y-%m-%d')
+
+    try:
+        with get_sigur_connection() as conn:
+            with conn.cursor() as cur:
+                sql = """
+                    SELECT 
+                        p.NAME AS employee_name,
+                        MIN(CASE WHEN l.DIRECTION = 2 THEN l.LOGTIME END) AS first_entry,
+                        MAX(CASE WHEN l.DIRECTION = 1 THEN l.LOGTIME END) AS last_exit
+                    FROM `tc-db-log`.`v_logs` l
+                    LEFT JOIN `tc-db-main`.`personal` p ON l.EMPHINT = p.ID
+                    WHERE l.ACCESS_OBJECT_TYPE_ID = 'EMP'
+                      AND DATE(l.LOGTIME) = %s
+                      AND l.DIRECTION IN (1, 2)
+                    GROUP BY p.NAME
+                """
+                cur.execute(sql, (today,))
+                rows = cur.fetchall()
+
+                if not rows:
+                    await message.answer("📅 За сегодня событий нет.")
+                    return
+
+                lines = [f"📅 График посещаемости за {today}:"]
+                for row in rows:
+                    name = row['employee_name'] or 'Неизвестно'
+                    first = row['first_entry'].strftime('%H:%M') if row['first_entry'] else '—'
+                    last = row['last_exit'].strftime('%H:%M') if row['last_exit'] else '—'
+                    lines.append(f"• {name}: вход {first}, выход {last}")
+
+                await message.answer("\n".join(lines))
+    except Exception as e:
+        await message.answer(f"⚠️ Ошибка при получении данных: {e}")
