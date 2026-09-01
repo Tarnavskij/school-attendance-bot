@@ -174,7 +174,6 @@ async def _show_teacher_page(target: Message, page: int, user_id: int, edit: boo
     teachers, total = get_teachers_paginated(page=page, per_page=TEACHERS_PER_PAGE, school_id=school_id)
     total_pages = max(1, ceil(total / TEACHERS_PER_PAGE))
 
-    # Если на странице нет учителей — показываем сообщение
     if not teachers:
         text = f"👨‍🏫 Управление пользователями (страница {page}/{total_pages})\n\nНа этой странице нет пользователей."
     else:
@@ -695,7 +694,6 @@ async def admin_meal_class_chosen(callback: CallbackQuery, state: FSMContext):
     class_id = int(callback.data.split(":")[-1])
     school_id = get_school_id_for_admin(callback.from_user.id)
 
-    # Получаем данные и сохраняем их в FSM (вместо _get_state)
     request = get_or_create_meal_request(class_id, school_id=school_id)
     items_dict = {item.student_id: item for item in request.items}
 
@@ -709,18 +707,15 @@ async def admin_meal_class_chosen(callback: CallbackQuery, state: FSMContext):
     )
     await state.set_state(MealStates.editing)
 
-    # Используем общую функцию рендера из meals.py
     await render_meal_keyboard(callback, state, edit=True)
     await callback.answer()
 
 
-# ===== График посещаемости для администратора =====
+# ===== График посещаемости для администратора (ИСПРАВЛЕНО) =====
 
-@admin_router.message(F.text == BTN_ATTENDANCE_GRAPH)
+# Добавлен lambda-фильтр, чтобы хендлер срабатывал только для админа
+@admin_router.message(F.text == BTN_ATTENDANCE_GRAPH, lambda msg: is_admin(msg.from_user.id))
 async def admin_attendance_graph(message: Message) -> None:
-    if not is_admin(message.from_user.id):
-        return
-
     today = date.today().strftime('%Y-%m-%d')
 
     try:
@@ -755,7 +750,6 @@ async def admin_attendance_graph(message: Message) -> None:
                 await message.answer("\n".join(lines))
     except Exception as e:
         await message.answer(f"⚠️ Ошибка при получении данных: {e}")
-
 
 
 @admin_router.message(Command("restore_admin"))
