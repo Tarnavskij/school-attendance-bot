@@ -518,8 +518,10 @@ def _load_meal_data(date_str: str, school_id: int):
             db.refresh(req)
         rows = []
         for req in reqs:
-            total = len(req.items)
-            paid = sum(1 for i in req.items if i.meal_type == "paid")
+            # ФИЛЬТРУЕМ ТОЛЬКО ТЕХ, КТО ЕСТ
+            eating_items = [i for i in req.items if i.is_eating]
+            total = len(eating_items)
+            paid = sum(1 for i in eating_items if i.meal_type == "paid")
             free = total - paid
             teacher_name = req.submitted_by.name if req.submitted_by else "—"
             rows.append({

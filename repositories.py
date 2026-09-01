@@ -788,8 +788,10 @@ def get_meal_summary(school_id: int, target_date: date | None = None) -> str:
 
         lines = [f"🍽️ Питание на {target_date.strftime('%d.%m.%Y')}"]
         for req in requests:
-            total = len(req.items)
-            paid = sum(1 for i in req.items if i.meal_type == "paid")
+            # ФИЛЬТРУЕМ ТОЛЬКО ТЕХ, КТО ЕСТ
+            eating_items = [i for i in req.items if i.is_eating]
+            total = len(eating_items)
+            paid = sum(1 for i in eating_items if i.meal_type == "paid")
             free = total - paid
             teacher_name = req.submitted_by.name if req.submitted_by else "—"
             lines.append(f"{req.class_.name}: всего {total} (платно {paid}, бесплатно {free}) — {teacher_name}")
@@ -810,8 +812,10 @@ def get_class_meal_summary(class_id: int, school_id: int,
         ).first()
         if not req:
             return "Заявка не найдена."
-        total = len(req.items)
-        paid = sum(1 for i in req.items if i.meal_type == "paid")
+        # ФИЛЬТРУЕМ ТОЛЬКО ТЕХ, КТО ЕСТ
+        eating_items = [i for i in req.items if i.is_eating]
+        total = len(eating_items)
+        paid = sum(1 for i in eating_items if i.meal_type == "paid")
         free = total - paid
         return f"🔄 Обновление {req.class_.name}: всего {total} (платно {paid}, бесплатно {free})"
 

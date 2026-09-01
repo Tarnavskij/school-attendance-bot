@@ -172,9 +172,10 @@ async def submit_meal(callback: CallbackQuery, state: FSMContext):
     if existed_before and not is_admin_mode:
         # Заново получаем данные из БД, чтобы быть уверенными в актуальности
         updated_request = get_or_create_meal_request(class_id, school_id=school_id)
-        updated_items = updated_request.items
-        total = len(updated_items)
-        paid = sum(1 for item in updated_items if item.meal_type == "paid")
+        # ФИЛЬТРУЕМ ТОЛЬКО ТЕХ, КТО ЕСТ (is_eating == True)
+        eating_items = [item for item in updated_request.items if item.is_eating]
+        total = len(eating_items)
+        paid = sum(1 for item in eating_items if item.meal_type == "paid")
         free = total - paid
         class_name = updated_request.class_name
         summary_text = f"🔄 Обновление питания для {class_name}: всего {total} (платно {paid}, бесплатно {free})"
