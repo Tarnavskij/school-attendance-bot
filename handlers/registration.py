@@ -18,6 +18,12 @@ from core.keyboards import BTN_REQUEST_ACCESS, access_request_kb
 from config import ADMIN_TELEGRAM_ID  # <-- убрали DEFAULT_SCHOOL_ID
 from core.roles import ROLE_LABELS, Role
 from database import SessionLocal, RegistrationRequest
+# Простая защита от спама заявками: не более 1 попытки начать регистрацию
+# с одного telegram_id за COOLDOWN_SECONDS секунд.
+import time
+
+_registration_attempts: dict[int, float] = {}
+_REGISTRATION_COOLDOWN_SECONDS = 60
 
 registration_router = Router()
 
@@ -89,6 +95,16 @@ async def cancel_on_text_during_inline(message: Message, state: FSMContext) -> N
 @registration_router.message(F.text == BTN_REQUEST_ACCESS)
 async def start_registration(message: Message, state: FSMContext) -> None:
     user_id = message.from_user.id
+
+    # Защита от спама: ограничение частоты попыток регистрации
+    now = time.time()
+    last_attempt = _registration_attempts.get(user_id, 0)
+    if now - last_attempt < _REGISTRATION_COOLDOWN_SECONDS:
+        await message.answer(
+            "Пожалуйста, подождите немного перед повторной попыткой."
+        )
+        return
+    _registration_attempts[user_id] = now
 
     # Уже зарегистрирован и активен
     if get_teacher_by_telegram_id(user_id):

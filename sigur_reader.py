@@ -16,7 +16,12 @@ logger = get_logger(__name__)
 SIGUR_DB_HOST = os.getenv('SIGUR_DB_HOST', 'localhost')
 SIGUR_DB_PORT = int(os.getenv('SIGUR_DB_PORT', 3305))
 SIGUR_DB_USER = os.getenv('SIGUR_DB_USER', 'root')
-SIGUR_DB_PASSWORD = os.getenv('SIGUR_DB_PASSWORD', '')
+SIGUR_DB_PASSWORD = os.getenv('SIGUR_DB_PASSWORD')
+if not SIGUR_DB_PASSWORD:
+    raise RuntimeError(
+        "Переменная окружения SIGUR_DB_PASSWORD не задана. "
+        "Подключение к БД Sigur без пароля запрещено."
+    )
 SIGUR_DB_NAME = os.getenv('SIGUR_DB_NAME', 'tc-db-log')
 
 

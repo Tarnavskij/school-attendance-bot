@@ -10,3 +10,6 @@ venv/
 .idea/
 .coverage
 .DS_Store
+local.key
+local.crt
+logs/

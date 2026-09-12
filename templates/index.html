@@ -261,6 +261,19 @@
     {% endif %}
   </div>
   <script>
+    // Утилита для безопасной вставки текста в HTML (защита от XSS).
+    // Обязательна для использования при любой вставке серверных/пользовательских
+    // данных через innerHTML в этом файле.
+    function escapeHtml(str) {
+        if (str === null || str === undefined) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     const summarySource = new EventSource('/stream?token={{ sse_token }}');
     summarySource.addEventListener('summary_update', async (e) => {
       try {
@@ -288,10 +301,10 @@
       }
       if (json.data && json.data.length > 0) {
         let rows = json.data.map(row => `<tr>
-          <td>${row.teacher}</td>
-          <td>${row.class}</td>
-          <td style="white-space:pre-line">${row.absent}</td>
-          <td style="color:rgba(255,255,255,0.4)">${row.time}</td>
+          <td>${escapeHtml(row.teacher)}</td>
+          <td>${escapeHtml(row.class)}</td>
+          <td style="white-space:pre-line">${escapeHtml(row.absent)}</td>
+          <td style="color:rgba(255,255,255,0.4)">${escapeHtml(row.time)}</td>
         </tr>`).join('');
         tableContainer.innerHTML = `<table>
           <tr><th>Учитель</th><th>Класс</th><th>Отсутствуют (причина)</th><th>Время</th></tr>
@@ -331,13 +344,16 @@
             {% if r.already_exists %}
               <span style="color:rgba(255,255,255,0.3);font-size:13px">Уже существует</span>
               <form method="post" action="/requests/{{ r.id }}/reject" style="display:inline;margin-left:6px">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-danger btn-sm">❌ Отклонить</button>
               </form>
             {% else %}
               <form method="post" action="/requests/{{ r.id }}/approve" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-success btn-sm">✅ Одобрить</button>
               </form>
               <form method="post" action="/requests/{{ r.id }}/reject" style="display:inline;margin-left:6px">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button type="submit" class="btn btn-danger btn-sm">❌ Отклонить</button>
               </form>
             {% endif %}
@@ -353,6 +369,23 @@
     {% endif %}
   </div>
   <script>
+    // Утилита для безопасной вставки текста в HTML (защита от XSS).
+    // Обязательна для использования при любой вставке серверных/пользовательских
+    // данных через innerHTML в этом файле.
+    function escapeHtml(str) {
+        if (str === null || str === undefined) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    // CSRF-токен Flask-WTF, используется в динамически генерируемых формах
+    // (ниже в updateRequests), которые создаются из JS и не проходят через Jinja.
+    const CSRF_TOKEN = "{{ csrf_token() }}";
+
     const reqSource = new EventSource('/stream?token={{ sse_token }}');
     reqSource.addEventListener('requests_update', async () => {
       try {
@@ -385,13 +418,16 @@
           if (r.already_exists) {
             actionsHtml = `<span style="color:rgba(255,255,255,0.3);font-size:13px">Уже существует</span>
               <form method="post" action="/requests/${r.id}/reject" style="display:inline;margin-left:6px">
+                <input type="hidden" name="csrf_token" value="${CSRF_TOKEN}">
                 <button type="submit" class="btn btn-danger btn-sm">❌ Отклонить</button>
               </form>`;
           } else {
             actionsHtml = `<form method="post" action="/requests/${r.id}/approve" style="display:inline">
+                <input type="hidden" name="csrf_token" value="${CSRF_TOKEN}">
                 <button type="submit" class="btn btn-success btn-sm">✅ Одобрить</button>
               </form>
               <form method="post" action="/requests/${r.id}/reject" style="display:inline;margin-left:6px">
+                <input type="hidden" name="csrf_token" value="${CSRF_TOKEN}">
                 <button type="submit" class="btn btn-danger btn-sm">❌ Отклонить</button>
               </form>`;
           }
@@ -399,10 +435,10 @@
           actionsHtml = '<span style="color:rgba(255,255,255,0.25);font-size:13px">Обработана</span>';
         }
         return `<tr>
-          <td><b>${r.name}</b></td>
-          <td style="color:rgba(255,255,255,0.5);font-family:monospace">${r.telegram_id}</td>
-          <td>${r.role_label}</td>
-          <td>${r.class_name || '—'}</td>
+          <td><b>${escapeHtml(r.name)}</b></td>
+          <td style="color:rgba(255,255,255,0.5);font-family:monospace">${escapeHtml(r.telegram_id)}</td>
+          <td>${escapeHtml(r.role_label)}</td>
+          <td>${escapeHtml(r.class_name || '—')}</td>
           <td>${statusHtml}</td>
           <td>${actionsHtml}</td>
         </tr>`;
@@ -466,6 +502,19 @@
   </div>
 
   <script>
+    // Утилита для безопасной вставки текста в HTML (защита от XSS).
+    // Обязательна для использования при любой вставке серверных/пользовательских
+    // данных через innerHTML в этом файле.
+    function escapeHtml(str) {
+        if (str === null || str === undefined) return '';
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     document.querySelectorAll('.meal-class-row').forEach(row => {
       row.addEventListener('click', async () => {
         const classId = row.dataset.classId;
@@ -489,7 +538,7 @@
             let rows = students.map(s => {
               const typeEmoji = s.meal_type === 'paid' ? '💰' : '🆓';
               const eatingIcon = s.is_eating ? '✅' : '❌';
-              return `<tr><td>${s.name}</td><td>${typeEmoji} ${s.meal_type === 'paid' ? 'платно' : 'бесплатно'}</td><td>${eatingIcon}</td></tr>`;
+              return `<tr><td>${escapeHtml(s.name)}</td><td>${typeEmoji} ${s.meal_type === 'paid' ? 'платно' : 'бесплатно'}</td><td>${eatingIcon}</td></tr>`;
             }).join('');
             detailTable.innerHTML = '<tr><th>Ученик</th><th>Тип</th><th>Ест</th></tr>' + rows;
           }
@@ -540,11 +589,11 @@
       if (json.data && json.data.length > 0) {
         let rows = json.data.map(row => {
           return `<tr class="meal-class-row" data-class-id="${row.class_id}">
-            <td>${row.class_name}</td>
+            <td>${escapeHtml(row.class_name)}</td>
             <td>${row.total}</td>
             <td>${row.paid}</td>
             <td>${row.free}</td>
-            <td>${row.teacher}</td>
+            <td>${escapeHtml(row.teacher)}</td>
           </tr>`;
         }).join('');
         tableContainer.innerHTML = `<table>
@@ -574,7 +623,7 @@
                 let rows = students.map(s => {
                   const typeEmoji = s.meal_type === 'paid' ? '💰' : '🆓';
                   const eatingIcon = s.is_eating ? '✅' : '❌';
-                  return `<tr><td>${s.name}</td><td>${typeEmoji} ${s.meal_type === 'paid' ? 'платно' : 'бесплатно'}</td><td>${eatingIcon}</td></tr>`;
+                  return `<tr><td>${escapeHtml(s.name)}</td><td>${typeEmoji} ${s.meal_type === 'paid' ? 'платно' : 'бесплатно'}</td><td>${eatingIcon}</td></tr>`;
                 }).join('');
                 detailTable.innerHTML = '<tr><th>Ученик</th><th>Тип</th><th>Ест</th></tr>' + rows;
               }
@@ -596,6 +645,7 @@
   <div class="glass">
     <h3>Загрузить Excel-файл с учениками</h3>
     <form method="post" enctype="multipart/form-data" action="/schools/{{ current_school_id }}/import">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="file" name="file" accept=".xlsx" required>
       <button type="submit" class="btn btn-primary">⬆️ Загрузить и импортировать</button>
       <a href="/schools" class="btn btn-sm btn-danger">Отмена</a>
@@ -718,6 +768,7 @@
   <div class="page-title">📥 Импорт учеников в «{{ school_name }}»</div>
   <div class="glass">
     <form method="post" enctype="multipart/form-data" action="/schools/{{ school_id }}/import">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="file" name="file" accept=".xlsx" required>
       <button type="submit" class="btn btn-primary">⬆️ Загрузить и импортировать</button>
       <a href="/schools" class="btn btn-sm btn-danger">Отмена</a>
@@ -796,7 +847,7 @@
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
     },
-    body: 'name=' + encodeURIComponent(newName)
+    body: 'name=' + encodeURIComponent(newName) + '&csrf_token=' + encodeURIComponent('{{ csrf_token() }}')
   })
   .then(response => response.json())
   .then(data => {
@@ -805,8 +856,8 @@
       document.getElementById('schoolNameDisplay').textContent = data.name;
       document.getElementById('schoolNameDisplay').style.display = 'inline';
       document.getElementById('schoolNameEdit').style.display = 'none';
-      // Обновляем название в навигации
-      document.querySelector('.school-name').innerHTML = '🏫 ' + data.name;
+      // Обновляем название в навигации (textContent — безопасная вставка без innerHTML)
+      document.querySelector('.school-name').textContent = '🏫 ' + data.name;
       // Обновляем поле ввода на случай повторного открытия карточки
       document.getElementById('schoolNameInput').value = data.name;
     } else {

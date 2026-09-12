@@ -66,6 +66,13 @@ async def show_reason_menu(callback: CallbackQuery) -> None:
     _, _, student_id_str, class_id_str = callback.data.split(":")
     student_id = int(student_id_str)
     class_id = int(class_id_str)
+
+    if not is_admin(user_id):
+        teacher = get_teacher_by_telegram_id(user_id)
+        if not teacher or teacher.class_id != class_id:
+            await callback.answer("Это не ваш класс.", show_alert=True)
+            return
+
     school_id = _get_school_id(user_id)
 
     absent = get_absent_students_today(class_id, date.today(), school_id=school_id)
@@ -97,8 +104,18 @@ async def apply_reason(callback: CallbackQuery) -> None:
     student_id = int(parts[2])
     class_id = int(parts[3])
     reason_idx = int(parts[4])
+
+    if reason_idx < 0 or reason_idx >= len(ABSENCE_REASONS):
+        await callback.answer("Недопустимая причина.", show_alert=True)
+        return
     reason = ABSENCE_REASONS[reason_idx]
     school_id = _get_school_id(user_id)
+
+    if not is_admin(user_id):
+        teacher = get_teacher_by_telegram_id(user_id)
+        if not teacher or teacher.class_id != class_id:
+            await callback.answer("Это не ваш класс.", show_alert=True)
+            return
 
     set_absence_reason(student_id, class_id, date.today(), reason, school_id=school_id)
     await callback.answer("Причина сохранена.")

@@ -104,7 +104,22 @@ async def cancel_flow(callback: CallbackQuery, state: FSMContext) -> None:
 async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, class_id_str, school_id_str = callback.data.split(":")
     class_id = int(class_id_str)
-    school_id = int(school_id_str)
+    callback_school_id = int(school_id_str)  # присланное значение — НЕ доверяем ему напрямую
+
+    teacher = get_teacher_by_telegram_id(callback.from_user.id)
+    if is_admin(callback.from_user.id):
+        real_school_id = get_school_id_for_admin(callback.from_user.id)
+    elif teacher:
+        real_school_id = teacher.school_id
+    else:
+        await callback.answer("Вы не зарегистрированы.", show_alert=True)
+        return
+
+    if callback_school_id != real_school_id:
+        await callback.answer("Недопустимая школа.", show_alert=True)
+        return
+
+    school_id = real_school_id
 
     session, result = AttendanceService.start_attendance(
         callback.from_user.id, class_id,
@@ -143,8 +158,14 @@ async def toggle_student(callback: CallbackQuery, state: FSMContext) -> None:
     parts = callback.data.split(":")
     session_id = int(parts[2])
     student_id = int(parts[3])
-    AttendanceService.toggle_student(session_id, student_id)
+
     data = await state.get_data()
+    expected_session_id = data.get("session_id")
+    if expected_session_id is None or session_id != expected_session_id:
+        await callback.answer("Сессия недействительна.", show_alert=True)
+        return
+
+    AttendanceService.toggle_student(session_id, student_id)
     school_id = data.get("school_id")
     students = get_students_by_class(data["class_id"], school_id=school_id)
     records = get_session_records(session_id)
@@ -156,6 +177,13 @@ async def toggle_student(callback: CallbackQuery, state: FSMContext) -> None:
 @attendance_router.callback_query(AttendanceStates.marking, F.data.startswith("att:cancel:"))
 async def cancel_marking(callback: CallbackQuery, state: FSMContext) -> None:
     session_id = int(callback.data.split(":")[-1])
+
+    data = await state.get_data()
+    expected_session_id = data.get("session_id")
+    if expected_session_id is None or session_id != expected_session_id:
+        await callback.answer("Сессия недействительна.", show_alert=True)
+        return
+
     delete_session(session_id)
     await callback.message.edit_text("Перекличка отменена.")
     await callback.message.answer(
@@ -169,6 +197,13 @@ async def cancel_marking(callback: CallbackQuery, state: FSMContext) -> None:
 @attendance_router.callback_query(AttendanceStates.marking, F.data.startswith("att:submit:"))
 async def submit_attendance(callback: CallbackQuery, state: FSMContext) -> None:
     session_id = int(callback.data.split(":")[-1])
+
+    data_check = await state.get_data()
+    expected_session_id = data_check.get("session_id")
+    if expected_session_id is None or session_id != expected_session_id:
+        await callback.answer("Сессия недействительна.", show_alert=True)
+        return
+
     AttendanceService.complete_session(session_id)
     result = get_session_result(session_id)
 

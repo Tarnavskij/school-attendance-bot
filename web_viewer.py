@@ -1,3 +1,4 @@
+import hmac
 import io
 import functools
 import json
@@ -15,12 +16,23 @@ from database import MealRequest, MealRequestItem, Student
 from config import DEFAULT_SCHOOL_ID, WEB_USERNAME, WEB_PASSWORD, FLASK_SECRET_KEY, SSE_PUBLISH_TOKEN
 from import_students import import_from_excel
 from sigur_reader import get_sigur_connection
+from core.validators import validate_safe_text, ValidationError, excel_safe
 import threading
 import os
 import tempfile
 
+from flask_wtf import CSRFProtect
+
 app = Flask(__name__)
 app.secret_key = FLASK_SECRET_KEY
+csrf = CSRFProtect(app)
+
+app.config.update(
+    SESSION_COOKIE_SECURE=True,      # cookie передаётся только по HTTPS
+    SESSION_COOKIE_HTTPONLY=True,    # cookie недоступна из JS
+    SESSION_COOKIE_SAMESITE="Lax",
+    MAX_CONTENT_LENGTH=10 * 1024 * 1024,  # лимит 10 МБ на входящий запрос (см. Задачу 14)
+)
 
 # ── SSE subscribers ───────────────────────────────────────────────────────────
 subscribers: list[queue.Queue] = []
@@ -36,7 +48,9 @@ def _notify_subscribers(event: str, data: dict | None = None) -> None:
 
 # ── HTTP Basic Auth ───────────────────────────────────────────────────────────
 def check_auth(username: str, password: str) -> bool:
-    return username == WEB_USERNAME and password == WEB_PASSWORD
+    username_ok = hmac.compare_digest(username.encode("utf-8"), WEB_USERNAME.encode("utf-8"))
+    password_ok = hmac.compare_digest(password.encode("utf-8"), WEB_PASSWORD.encode("utf-8"))
+    return username_ok and password_ok
 
 
 def require_auth(f):
@@ -376,11 +390,13 @@ def schools_page():
 @app.route("/schools", methods=["POST"])
 @require_auth
 def create_school_route():
-    name = request.form.get("name", "").strip()
-    if name:
-        from repositories import create_school
-        create_school(name)
-        _notify_subscribers("schools_update")
+    try:
+        name = validate_safe_text(request.form.get("name", ""), field_name="Название школы", max_len=100)
+    except ValidationError:
+        return redirect(url_for("schools_page"))
+    from repositories import create_school
+    create_school(name)
+    _notify_subscribers("schools_update")
     return redirect(url_for("schools_page"))
 
 
@@ -400,9 +416,10 @@ def update_school_name(school_id: int, new_name: str) -> bool:
 @app.route("/schools/<int:school_id>/rename", methods=["POST"])
 @require_auth
 def rename_school(school_id: int):
-    new_name = request.form.get("name", "").strip()
-    if not new_name:
-        return jsonify({"error": "Название не может быть пустым"}), 400
+    try:
+        new_name = validate_safe_text(request.form.get("name", ""), field_name="Название школы", max_len=100)
+    except ValidationError as e:
+        return jsonify({"error": str(e)}), 400
     current_id = get_web_school_id()
     if school_id != current_id:
         return jsonify({"error": "Неверная школа"}), 400
@@ -475,9 +492,9 @@ def download_excel():
             f"{name} — {reason or '—'}" for name, reason in s["absent"]
         ) if s["absent"] else "нет"
         ws.append([
-            s["teacher"],
-            s["class"],
-            absent_text,
+            excel_safe(s["teacher"]),
+            excel_safe(s["class"]),
+            excel_safe(absent_text),
             s["end_time"].strftime("%H:%M") if s["end_time"] else "",
         ])
     for col in ws.columns:
@@ -629,11 +646,11 @@ def download_meal_excel():
     rows_summary, _ = _load_meal_data(date_str, school_id)
     for row_data in rows_summary:
         ws_summary.append([
-            row_data["class_name"],
+            excel_safe(row_data["class_name"]),
             row_data["total"],
             row_data["paid"],
             row_data["free"],
-            row_data["teacher"],
+            excel_safe(row_data["teacher"]),
         ])
     for col in ws_summary.columns:
         width = max((len(str(cell.value or "")) for cell in col), default=10) + 2
@@ -655,7 +672,7 @@ def download_meal_excel():
             for s in students:
                 meal_type_str = "платно" if s["meal_type"] == "paid" else "бесплатно"
                 eating_str = "да" if s["is_eating"] else "нет"
-                ws_detail.append([cls.name, s["name"], meal_type_str, eating_str])
+                ws_detail.append([excel_safe(cls.name), excel_safe(s["name"]), meal_type_str, eating_str])
         for col in ws_detail.columns:
             width = max((len(str(cell.value or "")) for cell in col), default=10) + 2
             ws_detail.column_dimensions[col[0].column_letter].width = width
@@ -724,6 +741,7 @@ def stream():
 
 
 @app.route("/_publish", methods=["POST"])
+@csrf.exempt
 def internal_publish():
     token = request.headers.get("X-SSE-Token") or request.args.get("token")
     if token != SSE_PUBLISH_TOKEN:
@@ -733,6 +751,24 @@ def internal_publish():
     data = payload.get("data", {})
     _notify_subscribers(event, data)
     return jsonify({"ok": True})
+
+@app.after_request
+def set_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "frame-ancestors 'none';"
+    )
+    return response
+
+
+@app.errorhandler(413)
+def handle_file_too_large(e):
+    return "Файл слишком большой. Максимальный размер — 10 МБ.", 413
 
 
 if __name__ == "__main__":

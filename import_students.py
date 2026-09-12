@@ -6,6 +6,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 from database import Base, engine, SessionLocal, Class, Student, School
 from config import DEFAULT_SCHOOL_ID
+from core.validators import validate_safe_text, ValidationError
 
 
 def import_from_excel(file_path: str, school_id: int = DEFAULT_SCHOOL_ID) -> dict:
@@ -33,13 +34,24 @@ def import_from_excel(file_path: str, school_id: int = DEFAULT_SCHOOL_ID) -> dic
     for row in rows_iter:
         if not row or len(row) < 8:
             continue
-        surname = str(row[0]).strip() if row[0] else ""
-        name = str(row[1]).strip() if row[1] else ""
-        parallel = str(row[6]).strip() if row[6] else ""
-        letter = str(row[7]).strip() if row[7] else ""
+        surname_raw = str(row[0]).strip() if row[0] else ""
+        name_raw = str(row[1]).strip() if row[1] else ""
+        parallel_raw = str(row[6]).strip() if row[6] else ""
+        letter_raw = str(row[7]).strip() if row[7] else ""
 
-        if not surname or not name or not parallel:
+        if not surname_raw or not name_raw or not parallel_raw:
+            skipped += 1
             continue  # нет обязательных данных
+
+        try:
+            surname = validate_safe_text(surname_raw, field_name="Фамилия", max_len=50)
+            name = validate_safe_text(name_raw, field_name="Имя", max_len=50)
+            parallel = validate_safe_text(parallel_raw, field_name="Параллель", max_len=10)
+            letter = validate_safe_text(letter_raw, field_name="Буква", max_len=10) if letter_raw else ""
+        except ValidationError:
+            # Строка с недопустимыми символами — пропускаем, не прерывая весь импорт
+            skipped += 1
+            continue
 
         full_name = f"{surname} {name}"
         class_name = f"{parallel}{letter.upper()}" if letter else parallel

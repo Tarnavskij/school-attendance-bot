@@ -27,6 +27,7 @@ from repositories import (
     get_teachers_paginated, get_students_by_class_paginated,
     ensure_admin_teacher, get_or_create_meal_request,
 )
+from core.validators import validate_safe_text, ValidationError, excel_safe
 from services import ReportService
 from core.keyboards import (
     BTN_SCHOOL_SUMMARY, BTN_TEACHER_LIST, BTN_STUDENTS, BTN_SCHOOLS,
@@ -140,7 +141,13 @@ def _build_excel(sessions, date_str: str) -> bytes:
         absent_str = ", ".join(n for n, _ in sess.absent) if sess.absent else "нет"
         reasons_str = ", ".join(r or "—" for _, r in sess.absent) if sess.absent else ""
         end_time = sess.end_time.strftime("%H:%M") if sess.end_time else ""
-        ws.append([sess.teacher_name, sess.class_name, absent_str, reasons_str, end_time])
+        ws.append([
+            excel_safe(sess.teacher_name),
+            excel_safe(sess.class_name),
+            excel_safe(absent_str),
+            excel_safe(reasons_str),
+            end_time,
+        ])
     for col in ws.columns:
         width = max((len(str(cell.value or "")) for cell in col), default=10) + 2
         ws.column_dimensions[col[0].column_letter].width = width
@@ -576,9 +583,10 @@ async def add_student_start(callback: CallbackQuery, state: FSMContext) -> None:
 
 @admin_router.message(AddStudentStates.waiting_name)
 async def process_student_name(message: Message, state: FSMContext) -> None:
-    name = message.text.strip()
-    if not name:
-        await message.answer("Имя не может быть пустым.")
+    try:
+        name = validate_safe_text(message.text or "", field_name="Имя ученика", max_len=100)
+    except ValidationError as e:
+        await message.answer(str(e))
         return
     data = await state.get_data()
     class_id = data["class_id"]
