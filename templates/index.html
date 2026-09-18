@@ -570,7 +570,7 @@
       {% for row in primary_rows %}
       <tr class="meal-class-row" data-class-id="{{ row.class_id }}" data-has-request="{{ 'true' if row.has_request else 'false' }}">
         <td>{{ row.class_name }}</td>
-        <td>{{ '✅' if row.has_request else '❌' }}</td>
+        <td>{% if row.has_request %}<span style="color:#34c759; font-weight:700; font-size:16px;">✓</span>{% else %}<span style="color:#ff453a; font-weight:700; font-size:16px;">✗</span>{% endif %}</td>
         <td>{{ row.total if row.has_request else '—' }}</td>
         <td>{{ row.paid if row.has_request else '—' }}</td>
         <td>{{ row.free if row.has_request else '—' }}</td>
@@ -585,7 +585,7 @@
       {% for row in senior_rows %}
       <tr class="meal-class-row" data-class-id="{{ row.class_id }}" data-has-request="{{ 'true' if row.has_request else 'false' }}">
         <td>{{ row.class_name }}</td>
-        <td>{{ '✅' if row.has_request else '❌' }}</td>
+        <td>{% if row.has_request %}<span style="color:#34c759; font-weight:700; font-size:16px;">✓</span>{% else %}<span style="color:#ff453a; font-weight:700; font-size:16px;">✗</span>{% endif %}</td>
         <td>{{ row.total if row.has_request else '—' }}</td>
         <td>{{ row.paid if row.has_request else '—' }}</td>
         <td>{{ row.free if row.has_request else '—' }}</td>
@@ -715,9 +715,12 @@
         html += '<tr class="section-row"><td colspan="6" style="font-weight:700; color:rgba(52,199,89,0.9); padding-top:18px; letter-spacing:0.5px; text-transform:uppercase; font-size:12px;">🟢 1–4 классы</td></tr>';
         primary.forEach(row => {
           const hr = row.has_request;
+          const checkHtml = hr
+            ? '<span style="color:#34c759; font-weight:700; font-size:16px;">✓</span>'
+            : '<span style="color:#ff453a; font-weight:700; font-size:16px;">✗</span>';
           html += `<tr class="meal-class-row" data-class-id="${row.class_id}" data-has-request="${hr}">
             <td>${escapeHtml(row.class_name)}</td>
-            <td>${hr ? '✅' : '❌'}</td>
+            <td>${checkHtml}</td>
             <td>${hr ? row.total : '—'}</td>
             <td>${hr ? row.paid : '—'}</td>
             <td>${hr ? row.free : '—'}</td>
@@ -730,9 +733,12 @@
         html += '<tr class="section-row"><td colspan="6" style="font-weight:700; color:rgba(96,165,250,0.9); padding-top:18px; letter-spacing:0.5px; text-transform:uppercase; font-size:12px;">🔵 5–11 классы</td></tr>';
         senior.forEach(row => {
           const hr = row.has_request;
+          const checkHtml = hr
+            ? '<span style="color:#34c759; font-weight:700; font-size:16px;">✓</span>'
+            : '<span style="color:#ff453a; font-weight:700; font-size:16px;">✗</span>';
           html += `<tr class="meal-class-row" data-class-id="${row.class_id}" data-has-request="${hr}">
             <td>${escapeHtml(row.class_name)}</td>
-            <td>${hr ? '✅' : '❌'}</td>
+            <td>${checkHtml}</td>
             <td>${hr ? row.total : '—'}</td>
             <td>${hr ? row.paid : '—'}</td>
             <td>${hr ? row.free : '—'}</td>
