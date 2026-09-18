@@ -185,6 +185,38 @@ def api_summary():
     return jsonify({"data": rows, "stats": stats})
 
 
+def _load_teachers_by_role(school_id: int) -> dict:
+    """
+    Возвращает активных учителей школы, сгруппированных по ролям.
+    Порядок групп: director, class_teacher, subject_teacher, chef, secretary.
+    Роль 'admin' исключена — она не показывается в веб-панели.
+    """
+    role_order = ["director", "class_teacher", "subject_teacher", "chef", "secretary"]
+    result: dict[str, list] = {r: [] for r in role_order}
+
+    db = SessionLocal()
+    try:
+        teachers = (
+            db.query(Teacher)
+            .options(joinedload(Teacher.class_))
+            .filter(
+                Teacher.school_id == school_id,
+                Teacher.is_active == True,
+                Teacher.role.in_(role_order),
+            )
+            .order_by(Teacher.name)
+            .all()
+        )
+        for t in teachers:
+            result[t.role].append({
+                "name": t.name,
+                "class_name": t.class_.name if t.class_ else None,
+            })
+    finally:
+        db.close()
+    return result
+
+
 @app.route("/api/requests")
 @require_auth
 def api_requests():
@@ -194,7 +226,10 @@ def api_requests():
     try:
         reqs = (
             db.query(RegistrationRequest)
-            .filter(RegistrationRequest.school_id == school_id)
+            .filter(
+                RegistrationRequest.school_id == school_id,
+                RegistrationRequest.status == "pending",
+            )
             .order_by(RegistrationRequest.created_at.desc())
             .all()
         )
@@ -205,7 +240,7 @@ def api_requests():
                 Teacher.is_active == True,
             ).all()
         }
-        result = [
+        pending = [
             {
                 "id": r.id,
                 "name": r.name,
@@ -219,8 +254,8 @@ def api_requests():
         ]
     finally:
         db.close()
-    return jsonify(result)
-
+    teachers_by_role = _load_teachers_by_role(school_id)
+    return jsonify({"pending": pending, "teachers_by_role": teachers_by_role})
 
 @app.route("/api/school/stats")
 @require_auth
@@ -333,7 +368,10 @@ def requests_page():
     try:
         reqs = (
             db.query(RegistrationRequest)
-            .filter(RegistrationRequest.school_id == school_id)
+            .filter(
+                RegistrationRequest.school_id == school_id,
+                RegistrationRequest.status == "pending",
+            )
             .order_by(RegistrationRequest.created_at.desc())
             .all()
         )
@@ -358,9 +396,12 @@ def requests_page():
         ]
     finally:
         db.close()
+    teachers_by_role = _load_teachers_by_role(school_id)
     sse_token = _generate_sse_token()
     return render_template(
-        "index.html", page="requests", requests=result,
+        "index.html", page="requests",
+        requests=result,
+        teachers_by_role=teachers_by_role,
         pending_count=_pending_count(school_id),
         current_school_id=school_id,
         current_school_name=school_name,
