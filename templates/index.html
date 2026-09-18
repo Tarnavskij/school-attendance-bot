@@ -218,7 +218,7 @@
 <a href="/meals" class="{{ 'active' if page == 'meals' else '' }}">🍽️ Питание</a>
 <a href="/attendance" class="{{ 'active' if page == 'attendance' else '' }}">📅 График</a>
 <a href="/schools" class="{{ 'active' if page == 'schools' else '' }}">📥 Импорт</a>
-  <span class="school-name" onclick="openSchoolCard()">🏫 {{ current_school_name }}</span>
+  <span class="school-name" id="schoolNameNav">🏫 {{ current_school_name }}</span>
 </nav>
 
 <div class="container">
@@ -260,7 +260,7 @@
     <div class="empty">Нет данных за эту дату</div>
     {% endif %}
   </div>
-  <script>
+  <script nonce="{{ csp_nonce }}">
     // Утилита для безопасной вставки текста в HTML (защита от XSS).
     // Обязательна для использования при любой вставке серверных/пользовательских
     // данных через innerHTML в этом файле.
@@ -368,7 +368,7 @@
     <div class="empty">Новых заявок нет</div>
     {% endif %}
   </div>
-  <script>
+  <script nonce="{{ csp_nonce }}">
     // Утилита для безопасной вставки текста в HTML (защита от XSS).
     // Обязательна для использования при любой вставке серверных/пользовательских
     // данных через innerHTML в этом файле.
@@ -501,7 +501,7 @@
     </div>
   </div>
 
-  <script>
+  <script nonce="{{ csp_nonce }}">
     // Утилита для безопасной вставки текста в HTML (защита от XSS).
     // Обязательна для использования при любой вставке серверных/пользовательских
     // данных через innerHTML в этом файле.
@@ -790,14 +790,14 @@
 <!-- Модальное окно карточки школы -->
 <div id="schoolCardOverlay">
   <div class="school-card">
-    <button class="close-btn" onclick="closeSchoolCard()">&times;</button>
+    <button class="close-btn" id="schoolCardCloseBtn">&times;</button>
     <h2>
       <span id="schoolNameDisplay" style="font-weight:700; font-size:24px;">{{ current_school_name }}</span>
-      <span class="edit-icon" onclick="editSchoolName()">✏️</span>
+      <span class="edit-icon" id="schoolEditIcon">✏️</span>
     </h2>
     <div class="name-edit" id="schoolNameEdit">
       <input type="text" id="schoolNameInput" value="{{ current_school_name }}">
-      <button onclick="saveSchoolName()" class="btn btn-primary" style="padding:8px 16px; margin-left:8px;">Сохранить</button>
+      <button id="schoolSaveBtn" class="btn btn-primary" style="padding:8px 16px; margin-left:8px;">Сохранить</button>
     </div>
     <div class="stats-grid">
       <div class="stat-item">
@@ -813,11 +813,11 @@
         <div class="stat-label">Учителей</div>
       </div>
     </div>
-    <button onclick="closeSchoolCard()" class="btn btn-danger" style="width:100%;">Закрыть</button>
+    <button id="schoolCloseBtn" class="btn btn-danger" style="width:100%;">Закрыть</button>
   </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
   function openSchoolCard() {
     document.getElementById('schoolCardOverlay').style.display = 'flex';
     loadSchoolStats();
@@ -879,6 +879,13 @@
         // В случае ошибки оставляем "0"
       });
   }
+
+  // CSP nonce запрещает inline-обработчики (onclick=...), навешиваем их в JS
+  document.getElementById('schoolNameNav').addEventListener('click', openSchoolCard);
+  document.getElementById('schoolCardCloseBtn').addEventListener('click', closeSchoolCard);
+  document.getElementById('schoolEditIcon').addEventListener('click', editSchoolName);
+  document.getElementById('schoolSaveBtn').addEventListener('click', saveSchoolName);
+  document.getElementById('schoolCloseBtn').addEventListener('click', closeSchoolCard);
 </script>
 
 </body>

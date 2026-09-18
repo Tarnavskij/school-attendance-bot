@@ -129,7 +129,7 @@
     <div class="glass">
         <div class="toolbar">
             <input type="date" id="datePicker" value="{{ today }}">
-            <button class="btn" onclick="loadData()">Показать</button>
+            <button class="btn" id="loadDataBtn">Показать</button>
             <span style="color:rgba(255,255,255,0.3); font-size:13px; margin-left:10px;">
                 🔄 обновляется автоматически
             </span>
@@ -141,7 +141,7 @@
     </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
     const sse = new EventSource('/stream?token={{ sse_token }}');
     sse.addEventListener('attendance_update', () => {
         loadData();
@@ -182,6 +182,7 @@
 
     loadData();
     document.getElementById('datePicker').addEventListener('change', loadData);
+    document.getElementById('loadDataBtn').addEventListener('click', loadData);
 </script>
 </body>
 </html>

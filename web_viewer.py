@@ -7,7 +7,7 @@ import uuid
 from datetime import date
 from flask import (
     Flask, render_template, request, send_file,
-    redirect, url_for, session, Response, jsonify,
+    redirect, url_for, session, Response, jsonify, g,
 )
 from markupsafe import escape
 from sqlalchemy.orm import joinedload
@@ -33,6 +33,21 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     MAX_CONTENT_LENGTH=10 * 1024 * 1024,  # лимит 10 МБ на входящий запрос (см. Задачу 14)
 )
+
+
+# Одноразовый nonce для CSP — генерируется на каждый запрос,
+# кладётся в g.csp_nonce и передаётся в шаблоны как csp_nonce.
+# Позволяет держать script-src 'self' без 'unsafe-inline': браузер
+# выполнит только те <script>, у которых nonce совпадает с заголовком.
+@app.before_request
+def generate_csp_nonce():
+    g.csp_nonce = uuid.uuid4().hex
+
+
+@app.context_processor
+def inject_csp_nonce():
+    return {"csp_nonce": getattr(g, "csp_nonce", "")}
+
 
 # ── SSE subscribers ───────────────────────────────────────────────────────────
 subscribers: list[queue.Queue] = []
@@ -754,11 +769,12 @@ def internal_publish():
 
 @app.after_request
 def set_security_headers(response):
+    nonce = getattr(g, "csp_nonce", "")
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        "script-src 'self'; "
+        f"script-src 'self' 'nonce-{nonce}'; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data:; "
         "frame-ancestors 'none';"
