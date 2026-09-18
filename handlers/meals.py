@@ -114,7 +114,20 @@ async def meal_menu(message: Message, state: FSMContext):
     exists = is_meal_request_exists(teacher.class_id, today, teacher.school_id)
 
     if exists:
-        text = f"📋 Заявка на питание {date_str} уже подана."
+        # Считаем порции по уже сохранённой заявке
+        request = get_or_create_meal_request(teacher.class_id, school_id=teacher.school_id)
+        eating_items = [i for i in request.items if i.is_eating]
+        total = len(eating_items)
+        paid = sum(1 for i in eating_items if i.meal_type == "paid")
+        free = total - paid
+
+        text = (
+            f"📋 Заявка на питание {date_str} уже подана.\n"
+            f"\n"
+            f"Всего порций: {total}\n"
+            f"Платно: {paid}\n"
+            f"Бесплатно: {free}"
+        )
         button_text = "✏️ Редактировать"
         callback_data = "meal:start_edit"
     else:
