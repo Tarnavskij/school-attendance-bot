@@ -475,18 +475,48 @@
   </div>
 
   <div class="glass" id="meals-table-container">
-    {% if meals_data %}
+    {% if meal_stats %}
+    {% set primary_rows = [] %}
+    {% set senior_rows = [] %}
+    {% for row in meals_data %}
+      {% if row.grade and 1 <= row.grade <= 4 %}
+        {% set _ = primary_rows.append(row) %}
+      {% else %}
+        {% set _ = senior_rows.append(row) %}
+      {% endif %}
+    {% endfor %}
     <table>
-      <tr><th>Класс</th><th>Всего</th><th>Платно</th><th>Бесплатно</th><th>Учитель</th></tr>
-      {% for row in meals_data %}
-      <tr class="meal-class-row" data-class-id="{{ row.class_id }}">
+      <tr><th>Класс</th><th>Заявка</th><th>Всего</th><th>Платно</th><th>Бесплатно</th><th>Учитель</th></tr>
+      {% if primary_rows %}
+      <tr class="section-row">
+        <td colspan="6" style="font-weight:700; color:rgba(52,199,89,0.9); padding-top:18px; letter-spacing:0.5px; text-transform:uppercase; font-size:12px;">🟢 1–4 классы</td>
+      </tr>
+      {% for row in primary_rows %}
+      <tr class="meal-class-row" data-class-id="{{ row.class_id }}" data-has-request="{{ 'true' if row.has_request else 'false' }}">
         <td>{{ row.class_name }}</td>
-        <td>{{ row.total }}</td>
-        <td>{{ row.paid }}</td>
-        <td>{{ row.free }}</td>
-        <td>{{ row.teacher }}</td>
+        <td>{{ '✅' if row.has_request else '❌' }}</td>
+        <td>{{ row.total if row.has_request else '—' }}</td>
+        <td>{{ row.paid if row.has_request else '—' }}</td>
+        <td>{{ row.free if row.has_request else '—' }}</td>
+        <td>{{ row.teacher if row.has_request else '—' }}</td>
       </tr>
       {% endfor %}
+      {% endif %}
+      {% if senior_rows %}
+      <tr class="section-row">
+        <td colspan="6" style="font-weight:700; color:rgba(96,165,250,0.9); padding-top:18px; letter-spacing:0.5px; text-transform:uppercase; font-size:12px;">🔵 5–11 классы</td>
+      </tr>
+      {% for row in senior_rows %}
+      <tr class="meal-class-row" data-class-id="{{ row.class_id }}" data-has-request="{{ 'true' if row.has_request else 'false' }}">
+        <td>{{ row.class_name }}</td>
+        <td>{{ '✅' if row.has_request else '❌' }}</td>
+        <td>{{ row.total if row.has_request else '—' }}</td>
+        <td>{{ row.paid if row.has_request else '—' }}</td>
+        <td>{{ row.free if row.has_request else '—' }}</td>
+        <td>{{ row.teacher if row.has_request else '—' }}</td>
+      </tr>
+      {% endfor %}
+      {% endif %}
     </table>
     {% else %}
     <div class="empty">Нет поданных заявок за эту дату</div>
@@ -503,8 +533,6 @@
 
   <script nonce="{{ csp_nonce }}">
     // Утилита для безопасной вставки текста в HTML (защита от XSS).
-    // Обязательна для использования при любой вставке серверных/пользовательских
-    // данных через innerHTML в этом файле.
     function escapeHtml(str) {
         if (str === null || str === undefined) return '';
         return String(str)
@@ -515,38 +543,47 @@
             .replace(/'/g, '&#39;');
     }
 
-    document.querySelectorAll('.meal-class-row').forEach(row => {
-      row.addEventListener('click', async () => {
-        const classId = row.dataset.classId;
-        const detailContainer = document.getElementById('meal-detail-container');
-        const detailTable = document.getElementById('meal-detail-table');
-        if (detailContainer.style.display === 'block' && detailContainer.dataset.currentClass === classId) {
-          detailContainer.style.display = 'none';
-          return;
-        }
-        detailContainer.style.display = 'block';
-        detailContainer.dataset.currentClass = classId;
-        detailTable.innerHTML = '<tr><td colspan="3">Загрузка...</td></tr>';
-        try {
-          const params = new URLSearchParams(window.location.search);
-          const dateStr = params.get('date') || new Date().toISOString().slice(0,10);
-          const resp = await fetch(`/api/meals/class?class_id=${classId}&date=${dateStr}`);
-          const students = await resp.json();
-          if (students.length === 0) {
-            detailTable.innerHTML = '<tr><td colspan="3">Нет данных</td></tr>';
-          } else {
-            let rows = students.map(s => {
-              const typeEmoji = s.meal_type === 'paid' ? '💰' : '🆓';
-              const eatingIcon = s.is_eating ? '✅' : '❌';
-              return `<tr><td>${escapeHtml(s.name)}</td><td>${typeEmoji} ${s.meal_type === 'paid' ? 'платно' : 'бесплатно'}</td><td>${eatingIcon}</td></tr>`;
-            }).join('');
-            detailTable.innerHTML = '<tr><th>Ученик</th><th>Тип</th><th>Ест</th></tr>' + rows;
+    function bindMealRowEvents() {
+      document.querySelectorAll('.meal-class-row').forEach(row => {
+        row.addEventListener('click', async () => {
+          const classId = row.dataset.classId;
+          const hasRequest = row.dataset.hasRequest === 'true';
+          const detailContainer = document.getElementById('meal-detail-container');
+          const detailTable = document.getElementById('meal-detail-table');
+          if (detailContainer.style.display === 'block' && detailContainer.dataset.currentClass === classId) {
+            detailContainer.style.display = 'none';
+            return;
           }
-        } catch (err) {
-          detailTable.innerHTML = '<tr><td colspan="3">Ошибка загрузки</td></tr>';
-        }
+          detailContainer.style.display = 'block';
+          detailContainer.dataset.currentClass = classId;
+          if (!hasRequest) {
+            detailTable.innerHTML = '<tr><td colspan="3">Заявка не подана</td></tr>';
+            return;
+          }
+          detailTable.innerHTML = '<tr><td colspan="3">Загрузка...</td></tr>';
+          try {
+            const params = new URLSearchParams(window.location.search);
+            const dateStr = params.get('date') || new Date().toISOString().slice(0,10);
+            const resp = await fetch(`/api/meals/class?class_id=${classId}&date=${dateStr}`);
+            const students = await resp.json();
+            if (students.length === 0) {
+              detailTable.innerHTML = '<tr><td colspan="3">Нет данных</td></tr>';
+            } else {
+              let rows = students.map(s => {
+                const typeEmoji = s.meal_type === 'paid' ? '💰' : '🆓';
+                const eatingIcon = s.is_eating ? '✅' : '❌';
+                return `<tr><td>${escapeHtml(s.name)}</td><td>${typeEmoji} ${s.meal_type === 'paid' ? 'платно' : 'бесплатно'}</td><td>${eatingIcon}</td></tr>`;
+              }).join('');
+              detailTable.innerHTML = '<tr><th>Ученик</th><th>Тип</th><th>Ест</th></tr>' + rows;
+            }
+          } catch (err) {
+            detailTable.innerHTML = '<tr><td colspan="3">Ошибка загрузки</td></tr>';
+          }
+        });
       });
-    });
+    }
+
+    bindMealRowEvents();
 
     const mealsSource = new EventSource('/stream?token={{ sse_token }}');
     mealsSource.addEventListener('meals_update', async () => {
@@ -586,55 +623,51 @@
       } else {
         statsContainer.innerHTML = '';
       }
-      if (json.data && json.data.length > 0) {
-        let rows = json.data.map(row => {
-          return `<tr class="meal-class-row" data-class-id="${row.class_id}">
-            <td>${escapeHtml(row.class_name)}</td>
-            <td>${row.total}</td>
-            <td>${row.paid}</td>
-            <td>${row.free}</td>
-            <td>${escapeHtml(row.teacher)}</td>
-          </tr>`;
-        }).join('');
-        tableContainer.innerHTML = `<table>
-          <tr><th>Класс</th><th>Всего</th><th>Платно</th><th>Бесплатно</th><th>Учитель</th></tr>
-          ${rows}
-        </table>`;
-        document.querySelectorAll('.meal-class-row').forEach(row => {
-          row.addEventListener('click', async () => {
-            const classId = row.dataset.classId;
-            const detailContainer = document.getElementById('meal-detail-container');
-            const detailTable = document.getElementById('meal-detail-table');
-            if (detailContainer.style.display === 'block' && detailContainer.dataset.currentClass === classId) {
-              detailContainer.style.display = 'none';
-              return;
-            }
-            detailContainer.style.display = 'block';
-            detailContainer.dataset.currentClass = classId;
-            detailTable.innerHTML = '<tr><td colspan="3">Загрузка...</td></tr>';
-            try {
-              const params = new URLSearchParams(window.location.search);
-              const dateStr = params.get('date') || new Date().toISOString().slice(0,10);
-              const resp = await fetch(`/api/meals/class?class_id=${classId}&date=${dateStr}`);
-              const students = await resp.json();
-              if (students.length === 0) {
-                detailTable.innerHTML = '<tr><td colspan="3">Нет данных</td></tr>';
-              } else {
-                let rows = students.map(s => {
-                  const typeEmoji = s.meal_type === 'paid' ? '💰' : '🆓';
-                  const eatingIcon = s.is_eating ? '✅' : '❌';
-                  return `<tr><td>${escapeHtml(s.name)}</td><td>${typeEmoji} ${s.meal_type === 'paid' ? 'платно' : 'бесплатно'}</td><td>${eatingIcon}</td></tr>`;
-                }).join('');
-                detailTable.innerHTML = '<tr><th>Ученик</th><th>Тип</th><th>Ест</th></tr>' + rows;
-              }
-            } catch (err) {
-              detailTable.innerHTML = '<tr><td colspan="3">Ошибка загрузки</td></tr>';
-            }
-          });
-        });
-      } else {
+
+      if (!json.stats) {
         tableContainer.innerHTML = '<div class="empty">Нет поданных заявок за эту дату</div>';
+        return;
       }
+
+      const primary = json.data.filter(r => r.grade != null && 1 <= r.grade && r.grade <= 4);
+      const senior  = json.data.filter(r => !(r.grade != null && 1 <= r.grade && r.grade <= 4));
+
+      let html = '<table>';
+      html += '<tr><th>Класс</th><th>Заявка</th><th>Всего</th><th>Платно</th><th>Бесплатно</th><th>Учитель</th></tr>';
+
+      if (primary.length > 0) {
+        html += '<tr class="section-row"><td colspan="6" style="font-weight:700; color:rgba(52,199,89,0.9); padding-top:18px; letter-spacing:0.5px; text-transform:uppercase; font-size:12px;">🟢 1–4 классы</td></tr>';
+        primary.forEach(row => {
+          const hr = row.has_request;
+          html += `<tr class="meal-class-row" data-class-id="${row.class_id}" data-has-request="${hr}">
+            <td>${escapeHtml(row.class_name)}</td>
+            <td>${hr ? '✅' : '❌'}</td>
+            <td>${hr ? row.total : '—'}</td>
+            <td>${hr ? row.paid : '—'}</td>
+            <td>${hr ? row.free : '—'}</td>
+            <td>${hr ? escapeHtml(row.teacher) : '—'}</td>
+          </tr>`;
+        });
+      }
+
+      if (senior.length > 0) {
+        html += '<tr class="section-row"><td colspan="6" style="font-weight:700; color:rgba(96,165,250,0.9); padding-top:18px; letter-spacing:0.5px; text-transform:uppercase; font-size:12px;">🔵 5–11 классы</td></tr>';
+        senior.forEach(row => {
+          const hr = row.has_request;
+          html += `<tr class="meal-class-row" data-class-id="${row.class_id}" data-has-request="${hr}">
+            <td>${escapeHtml(row.class_name)}</td>
+            <td>${hr ? '✅' : '❌'}</td>
+            <td>${hr ? row.total : '—'}</td>
+            <td>${hr ? row.paid : '—'}</td>
+            <td>${hr ? row.free : '—'}</td>
+            <td>${hr ? escapeHtml(row.teacher) : '—'}</td>
+          </tr>`;
+        });
+      }
+
+      html += '</table>';
+      tableContainer.innerHTML = html;
+      bindMealRowEvents();
     }
   </script>
 

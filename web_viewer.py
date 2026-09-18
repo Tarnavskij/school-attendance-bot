@@ -532,6 +532,13 @@ def _load_meal_data(date_str: str, school_id: int):
     db = SessionLocal()
     try:
         db.expire_all()
+        # Все классы школы в порядке возрастания (1А, 1Б, ... 11Б)
+        classes = (
+            db.query(Class)
+            .filter(Class.school_id == school_id)
+            .order_by(Class.grade, Class.letter)
+            .all()
+        )
         reqs = (
             db.query(MealRequest)
             .options(
@@ -543,33 +550,45 @@ def _load_meal_data(date_str: str, school_id: int):
                 MealRequest.school_id == school_id,
                 MealRequest.request_date == date_str,
             )
-            .order_by(MealRequest.class_id)
             .all()
         )
         for req in reqs:
             db.refresh(req)
+        requests_by_class = {req.class_id: req for req in reqs}
+
         rows = []
-        for req in reqs:
-            # ФИЛЬТРУЕМ ТОЛЬКО ТЕХ, КТО ЕСТ
-            eating_items = [i for i in req.items if i.is_eating]
-            total = len(eating_items)
-            paid = sum(1 for i in eating_items if i.meal_type == "paid")
-            free = total - paid
-            teacher_name = req.submitted_by.name if req.submitted_by else "—"
+        for cls in classes:
+            req = requests_by_class.get(cls.id)
+            if req:
+                # ФИЛЬТРУЕМ ТОЛЬКО ТЕХ, КТО ЕСТ
+                eating_items = [i for i in req.items if i.is_eating]
+                total = len(eating_items)
+                paid = sum(1 for i in eating_items if i.meal_type == "paid")
+                free = total - paid
+                teacher_name = req.submitted_by.name if req.submitted_by else "—"
+                has_request = True
+            else:
+                total = 0
+                paid = 0
+                free = 0
+                teacher_name = "—"
+                has_request = False
             rows.append({
-                "class_name": req.class_.name,
-                "class_id": req.class_id,
+                "class_name": cls.name,
+                "class_id": cls.id,
+                "grade": cls.grade,
                 "total": total,
                 "paid": paid,
                 "free": free,
                 "teacher": teacher_name,
+                "has_request": has_request,
             })
         stats = {
             "total_classes": len(reqs),
             "total_meals": sum(r["total"] for r in rows),
             "paid": sum(r["paid"] for r in rows),
             "free": sum(r["free"] for r in rows),
-        } if rows else None
+        } if reqs else None
         return rows, stats
     finally:
         db.close()
@@ -658,18 +677,36 @@ def download_meal_excel():
         cell = ws_summary.cell(row=1, column=col, value=h)
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal="center")
+
     rows_summary, _ = _load_meal_data(date_str, school_id)
-    for row_data in rows_summary:
-        ws_summary.append([
-            excel_safe(row_data["class_name"]),
-            row_data["total"],
-            row_data["paid"],
-            row_data["free"],
-            excel_safe(row_data["teacher"]),
-        ])
+    primary_rows = [r for r in rows_summary if r.get("grade") and 1 <= r["grade"] <= 4]
+    senior_rows = [r for r in rows_summary if not (r.get("grade") and 1 <= r["grade"] <= 4)]
+
+    def _write_summary_block(ws, title, rows):
+        # Заголовок блока жирным (одна ячейка в первой колонке)
+        ws.append([title, "", "", "", ""])
+        ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
+        for r in rows:
+            if r["has_request"]:
+                ws.append([
+                    excel_safe(r["class_name"]),
+                    r["total"],
+                    r["paid"],
+                    r["free"],
+                    excel_safe(r["teacher"]),
+                ])
+            else:
+                ws.append([excel_safe(r["class_name"]), "—", "—", "—", "—"])
+
+    if primary_rows:
+        _write_summary_block(ws_summary, "Начальная школа", primary_rows)
+    if senior_rows:
+        _write_summary_block(ws_summary, "Старшая школа", senior_rows)
+
     for col in ws_summary.columns:
         width = max((len(str(cell.value or "")) for cell in col), default=10) + 2
         ws_summary.column_dimensions[col[0].column_letter].width = width
+
     if export_type == "full":
         ws_detail = wb.create_sheet("Детализация")
         detail_headers = ["Класс", "Ученик", "Тип питания", "Ест"]
@@ -677,20 +714,34 @@ def download_meal_excel():
             cell = ws_detail.cell(row=1, column=col, value=h)
             cell.font = Font(bold=True)
             cell.alignment = Alignment(horizontal="center")
-        db = SessionLocal()
-        try:
-            classes = db.query(Class).filter(Class.school_id == school_id).order_by(Class.name).all()
-        finally:
-            db.close()
-        for cls in classes:
-            students = _load_class_meal_students(cls.id, date_str, school_id)
-            for s in students:
-                meal_type_str = "платно" if s["meal_type"] == "paid" else "бесплатно"
-                eating_str = "да" if s["is_eating"] else "нет"
-                ws_detail.append([excel_safe(cls.name), excel_safe(s["name"]), meal_type_str, eating_str])
+
+        def _write_detail_block(ws, title, rows):
+            ws.append([title, "", "", ""])
+            ws.cell(row=ws.max_row, column=1).font = Font(bold=True)
+            for r in rows:
+                if r["has_request"]:
+                    students = _load_class_meal_students(r["class_id"], date_str, school_id)
+                    for s in students:
+                        meal_type_str = "платно" if s["meal_type"] == "paid" else "бесплатно"
+                        eating_str = "да" if s["is_eating"] else "нет"
+                        ws.append([
+                            excel_safe(r["class_name"]),
+                            excel_safe(s["name"]),
+                            meal_type_str,
+                            eating_str,
+                        ])
+                else:
+                    ws.append([excel_safe(r["class_name"]), "—", "—", "—"])
+
+        if primary_rows:
+            _write_detail_block(ws_detail, "Начальная школа", primary_rows)
+        if senior_rows:
+            _write_detail_block(ws_detail, "Старшая школа", senior_rows)
+
         for col in ws_detail.columns:
             width = max((len(str(cell.value or "")) for cell in col), default=10) + 2
             ws_detail.column_dimensions[col[0].column_letter].width = width
+
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
