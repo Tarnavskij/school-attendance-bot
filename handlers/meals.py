@@ -108,6 +108,39 @@ async def meal_menu(message: Message, state: FSMContext):
         await message.answer("У вас не указан класс. Обратитесь к администратору.")
         return
 
+    # Промежуточный экран: подана ли заявка на сегодня
+    today = date.today()
+    date_str = today.strftime("%d.%m")
+    exists = is_meal_request_exists(teacher.class_id, today, teacher.school_id)
+
+    if exists:
+        text = f"📋 Заявка на питание {date_str} уже подана."
+        button_text = "✏️ Редактировать"
+        callback_data = "meal:start_edit"
+    else:
+        text = f"📋 Заявка на питание {date_str} ещё не подана."
+        button_text = "📝 Подать"
+        callback_data = "meal:start_new"
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=button_text, callback_data=callback_data)],
+        [back_to_menu_btn()],
+    ])
+    await message.answer(text, reply_markup=kb)
+
+
+@meals_router.callback_query(F.data.in_({"meal:start_new", "meal:start_edit"}))
+async def meal_start_editing(callback: CallbackQuery, state: FSMContext):
+    user_id = callback.from_user.id
+    if not check_access(user_id, [Role.CLASS_TEACHER]):
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+
+    teacher = get_teacher_by_telegram_id(user_id)
+    if not teacher or not teacher.class_id:
+        await callback.answer("У вас не указан класс.", show_alert=True)
+        return
+
     request = get_or_create_meal_request(teacher.class_id, school_id=teacher.school_id)
     items_dict = {item.student_id: item for item in request.items}
 
@@ -120,7 +153,8 @@ async def meal_menu(message: Message, state: FSMContext):
         is_admin_mode=False
     )
     await state.set_state(MealStates.editing)
-    await render_meal_keyboard(message, state, edit=False)
+    await render_meal_keyboard(callback.message, state, edit=False)
+    await callback.answer()
 
 
 @meals_router.callback_query(MealStates.editing, F.data.startswith("meal:toggle:"))
