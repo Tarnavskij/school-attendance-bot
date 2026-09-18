@@ -774,6 +774,12 @@ def get_meal_summary(school_id: int, target_date: date | None = None) -> str:
     if target_date is None:
         target_date = date.today()
     with get_db() as db:
+        # Все классы школы в порядке возрастания (1А, 1Б, 1В, 2А, ... 11Б)
+        classes = db.query(Class).filter(
+            Class.school_id == school_id
+        ).order_by(Class.grade, Class.letter).all()
+
+        # Все заявки на дату
         requests = db.query(MealRequest).options(
             joinedload(MealRequest.class_),
             joinedload(MealRequest.submitted_by),
@@ -781,20 +787,48 @@ def get_meal_summary(school_id: int, target_date: date | None = None) -> str:
         ).filter(
             MealRequest.school_id == school_id,
             MealRequest.request_date == target_date,
-        ).order_by(MealRequest.class_id).all()
+        ).all()
 
+        # Если на дату ни одной заявки — короткое сообщение
         if not requests:
             return f"🍽️ На {target_date.strftime('%d.%m.%Y')} заявок нет."
 
+        # Заявки по class_id — для быстрого поиска при обходе классов
+        requests_by_class = {req.class_id: req for req in requests}
+
+        primary_lines = []   # 1–4 классы
+        senior_lines = []    # 5–11 классы
+
+        for cls in classes:
+            grade = cls.grade or 0
+            req = requests_by_class.get(cls.id)
+
+            if req:
+                # ФИЛЬТРУЕМ ТОЛЬКО ТЕХ, КТО ЕСТ
+                eating_items = [i for i in req.items if i.is_eating]
+                total = len(eating_items)
+                paid = sum(1 for i in eating_items if i.meal_type == "paid")
+                free = total - paid
+                teacher_name = req.submitted_by.name if req.submitted_by else "—"
+                line = f"{cls.name}: всего {total} (платно {paid}, бесплатно {free}) — {teacher_name}"
+            else:
+                line = f"{cls.name}: —"
+
+            if 1 <= grade <= 4:
+                primary_lines.append(line)
+            else:
+                senior_lines.append(line)
+
         lines = [f"🍽️ Питание на {target_date.strftime('%d.%m.%Y')}"]
-        for req in requests:
-            # ФИЛЬТРУЕМ ТОЛЬКО ТЕХ, КТО ЕСТ
-            eating_items = [i for i in req.items if i.is_eating]
-            total = len(eating_items)
-            paid = sum(1 for i in eating_items if i.meal_type == "paid")
-            free = total - paid
-            teacher_name = req.submitted_by.name if req.submitted_by else "—"
-            lines.append(f"{req.class_.name}: всего {total} (платно {paid}, бесплатно {free}) — {teacher_name}")
+        if primary_lines:
+            lines.append("")
+            lines.append("🟢 1–4 классы")
+            lines.extend(primary_lines)
+        if senior_lines:
+            lines.append("")
+            lines.append("🔵 5–11 классы")
+            lines.extend(senior_lines)
+
         return "\n".join(lines)
 
 
