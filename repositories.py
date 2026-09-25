@@ -417,6 +417,50 @@ def get_absent_students_today(class_id: int, today_date: date,
                 result[rec.student_id] = {"name": rec.student.name, "reason": rec.reason}
         return result
 
+def get_class_session_today(class_id: int, target_date: date, school_id: int) -> dict | None:
+    """
+    Возвращает сессию за указанную дату для класса (любого статуса) или None.
+    Формат: {"id": int, "class_id": int, "class_name": str, "status": str,
+             "records": [{"student_id": int, "is_present": bool, "reason": str | None}, ...]}
+    """
+    with get_db() as db:
+        sess = db.query(AttendanceSession).options(
+            joinedload(AttendanceSession.class_),
+            joinedload(AttendanceSession.records),
+        ).filter(
+            AttendanceSession.class_id == class_id,
+            AttendanceSession.session_date == target_date,
+            AttendanceSession.school_id == school_id,
+        ).first()
+        if not sess:
+            return None
+        return {
+            "id": sess.id,
+            "class_id": sess.class_id,
+            "class_name": sess.class_.name if sess.class_ else "?",
+            "status": sess.status,
+            "records": [
+                {"student_id": r.student_id, "is_present": r.is_present, "reason": r.reason}
+                for r in sess.records
+            ],
+        }
+
+
+def update_session_records(
+    session_id: int,
+    updates: list[tuple[int, bool, str | None]],
+) -> None:
+    """
+    Массовое обновление записей сессии.
+    updates: список кортежей (student_id, is_present, reason).
+    """
+    with get_db() as db:
+        for student_id, is_present, reason in updates:
+            db.query(AttendanceRecord).filter(
+                AttendanceRecord.session_id == session_id,
+                AttendanceRecord.student_id == student_id,
+            ).update({"is_present": is_present, "reason": reason})
+
 
 def is_class_done_today(class_id: int, today_date: date, school_id: int) -> bool:
     with get_db() as db:
