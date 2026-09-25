@@ -65,6 +65,7 @@ class SessionDTO:
     end_time: datetime | None
     absent: list[tuple[str, str | None]]
     school_name: str | None
+    status: str = "completed"
 
 
 @dataclass
@@ -347,7 +348,8 @@ def get_session_result(session_id: int) -> SessionDTO | None:
             class_id=s.class_id,
             end_time=s.end_time,
             absent=[(r.student.name, r.reason) for r in s.records if not r.is_present],
-            school_name=s.school.name if s.school else None
+            school_name=s.school.name if s.school else None,
+            status=s.status,
         )
 
 
@@ -376,7 +378,8 @@ def get_sessions_for_report(target_date: date, school_id: int) -> list[SessionDT
                            class_id=s.class_id,
                            end_time=s.end_time,
                            absent=[(r.student.name, r.reason) for r in s.records if not r.is_present],
-                           school_name=s.school.name if s.school else None)
+                           school_name=s.school.name if s.school else None,
+                           status=s.status)
                 for s in sessions]
 
 
@@ -544,7 +547,8 @@ def get_teacher_session_today(teacher_id: int, today_date: date,
             class_id=s.class_id,
             end_time=s.end_time,
             absent=[(r.student.name, r.reason) for r in s.records if not r.is_present],
-            school_name=s.school.name if s.school else None
+            school_name=s.school.name if s.school else None,
+            status=s.status,
         )
 
 

@@ -1,16 +1,17 @@
 # helpers/session_card.py
 """
 Утилита для получения карточки сегодняшней переклички учителя.
-Используется в handlers/attendance.py и handlers/common.py.
+Используется в handlers/attendance.py.
 """
 from datetime import date
 from repositories import get_teacher_by_telegram_id, get_teacher_session_today
 
 
-def get_today_session_card(telegram_id: int) -> str | None:
+def get_today_session_card_data(telegram_id: int) -> dict | None:
     """
-    Возвращает текст карточки переклички, проведённой сегодня этим учителем.
-    Если переклички не было — возвращает None.
+    Возвращает данные карточки переклички, проведённой сегодня этим учителем:
+        {"text": str, "session_id": int, "status": str}
+    Или None, если переклички не было.
     """
     teacher = get_teacher_by_telegram_id(telegram_id)
     if not teacher:
@@ -29,4 +30,8 @@ def get_today_session_card(telegram_id: int) -> str | None:
     else:
         lines.append("\n✅ Все присутствовали")
 
-    return "\n".join(lines)
+    return {
+        "text": "\n".join(lines),
+        "session_id": session.id,
+        "status": session.status,
+    }

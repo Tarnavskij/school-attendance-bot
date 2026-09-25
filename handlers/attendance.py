@@ -13,13 +13,15 @@ from repositories import (
     get_session_result,
     delete_session,
     get_teacher_by_telegram_id,
+    get_teacher_session_today,
     get_class_teacher_for_class,
-    get_default_school_id,  # <-- добавили импорт
+    get_default_school_id,
+    update_session_records,
 )
 from core.keyboards import BTN_START_ROLL, build_menu_keyboard
 from core.roles import check_access, Role, is_admin
 from core.school_context import get_school_id_for_admin
-from helpers.session_card import get_today_session_card
+from helpers.session_card import get_today_session_card_data
 
 attendance_router = Router()
 
@@ -27,6 +29,7 @@ attendance_router = Router()
 class AttendanceStates(StatesGroup):
     choosing_class = State()
     marking = State()
+    editing_own = State()
 
 
 @attendance_router.message(F.text == BTN_START_ROLL)
@@ -42,9 +45,18 @@ async def start_attendance(message: Message, state: FSMContext) -> None:
 
     # Администратору не показываем карточку
     if not is_admin(message.from_user.id):
-        card = get_today_session_card(message.from_user.id)
-        if card:
-            await message.answer(card)
+        card_data = get_today_session_card_data(message.from_user.id)
+        if card_data:
+            kb = None
+            if card_data["status"] == "completed":
+                kb = InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="✏️ Исправить",
+                        callback_data=f"att:edit_own:{card_data['session_id']}",
+                    )],
+                    [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="nav:menu")],
+                ])
+            await message.answer(card_data["text"], reply_markup=kb)
             return
 
     # Определяем школу
@@ -270,3 +282,207 @@ def _build_marking_keyboard(students, session_id: int, records: list) -> InlineK
         InlineKeyboardButton(text="❌ Отмена", callback_data=f"att:cancel:{session_id}"),
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+# ── Редактирование своей переклички (для учителя, который её провёл) ─────────
+
+@attendance_router.callback_query(F.data.startswith("att:edit_own:"))
+async def edit_own_start(callback: CallbackQuery, state: FSMContext) -> None:
+    if not check_access(callback.from_user.id, [Role.SUBJECT_TEACHER, Role.CLASS_TEACHER]):
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+
+    session_id = int(callback.data.split(":")[-1])
+
+    teacher = get_teacher_by_telegram_id(callback.from_user.id)
+    if not teacher:
+        await callback.answer("Вы не зарегистрированы.", show_alert=True)
+        return
+
+    # Убеждаемся, что это действительно сессия этого учителя за сегодня
+    session = get_teacher_session_today(teacher.id, date.today(), school_id=teacher.school_id)
+    if not session or session.id != session_id:
+        await callback.answer("Сессия не найдена.", show_alert=True)
+        return
+
+    if session.status != "completed":
+        await callback.answer("Эту перекличку уже нельзя редактировать.", show_alert=True)
+        return
+
+    students = get_students_by_class(session.class_id, school_id=teacher.school_id)
+    records = get_session_records(session_id)
+    records_map = {r.student_id: r for r in records}
+
+    items: dict[int, dict] = {}
+    for s in students:
+        rec = records_map.get(s.id)
+        if rec:
+            items[s.id] = {
+                "name": s.name,
+                "is_present": rec.is_present,
+                "reason": rec.reason,
+            }
+        else:
+            # Ученик добавлен после переклички — по умолчанию присутствует
+            items[s.id] = {"name": s.name, "is_present": True, "reason": None}
+
+    # Сохраняем исходное состояние отметок — нужно для вычисления diff при сохранении
+    original_state = {sid: it["is_present"] for sid, it in items.items()}
+
+    await state.update_data(
+        session_id=session_id,
+        class_id=session.class_id,
+        school_id=teacher.school_id,
+        class_name=session.class_name,
+        items=items,
+        original_state=original_state,
+    )
+    await state.set_state(AttendanceStates.editing_own)
+
+    await _render_edit_own_keyboard(callback, state)
+    await callback.answer()
+
+
+@attendance_router.callback_query(AttendanceStates.editing_own, F.data.startswith("att:edit_toggle:"))
+async def edit_own_toggle(callback: CallbackQuery, state: FSMContext) -> None:
+    student_id = int(callback.data.split(":")[-1])
+    data = await state.get_data()
+    items = data.get("items", {})
+    if student_id in items:
+        items[student_id]["is_present"] = not items[student_id]["is_present"]
+        await state.update_data(items=items)
+    await _render_edit_own_keyboard(callback, state)
+    await callback.answer()
+
+
+@attendance_router.callback_query(AttendanceStates.editing_own, F.data == "att:edit_save")
+async def edit_own_save(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    session_id = data.get("session_id")
+    items = data.get("items", {})
+    original_state = data.get("original_state", {})
+    class_id = data.get("class_id")
+    school_id = data.get("school_id")
+    class_name = data.get("class_name", "?")
+
+    if not session_id or not items or class_id is None or school_id is None:
+        await callback.answer("Сессия истекла, начните заново.", show_alert=True)
+        await state.clear()
+        return
+
+    # Вычисляем diff: кто изменился относительно исходного состояния
+    changes: list[tuple[str, bool]] = []
+    for student_id, item in items.items():
+        old_present = original_state.get(student_id)
+        new_present = item["is_present"]
+        if old_present is not None and old_present != new_present:
+            changes.append((item["name"], new_present))
+
+    # Сохраняем в БД
+    updates: list[tuple[int, bool, str | None]] = []
+    for student_id, item in items.items():
+        if item["is_present"]:
+            updates.append((student_id, True, None))
+        else:
+            # Сохраняем прежнюю причину, если была
+            updates.append((student_id, False, item.get("reason")))
+
+    update_session_records(session_id, updates)
+
+    notify = getattr(callback.bot, "notify_web", None)
+    if notify:
+        await notify("summary_update")
+
+    # Уведомляем классного руководителя, если есть изменения и это не он сам
+    if changes:
+        class_teacher = get_class_teacher_for_class(class_id, school_id)
+        if class_teacher and class_teacher.telegram_id != callback.from_user.id:
+            notify_lines = [f"📋 В вашем классе {class_name} внесены изменения:"]
+            for name, is_present in changes:
+                status = "присутствует" if is_present else "отсутствует"
+                notify_lines.append(f"• {name} — {status}")
+            # Если появились новые отсутствующие — просим отметить причины
+            if any(not is_present for _, is_present in changes):
+                notify_lines.append("\nОтметьте причины отсутствующим в разделе «Мой класс».")
+            try:
+                await callback.bot.send_message(
+                    class_teacher.telegram_id,
+                    "\n".join(notify_lines),
+                )
+            except Exception:
+                pass
+
+    await state.clear()
+    await callback.answer("✅ Сохранено")
+
+    # Перерисовываем карточку учителя
+    card_data = get_today_session_card_data(callback.from_user.id)
+    if card_data:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="✏️ Исправить",
+                callback_data=f"att:edit_own:{card_data['session_id']}",
+            )],
+            [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="nav:menu")],
+        ])
+        await callback.message.edit_text(card_data["text"], reply_markup=kb)
+    else:
+        await callback.message.edit_text("✅ Перекличка обновлена.", reply_markup=None)
+
+
+@attendance_router.callback_query(AttendanceStates.editing_own, F.data == "att:edit_cancel")
+async def edit_own_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.clear()
+    await callback.answer("Изменения отменены")
+
+    card_data = get_today_session_card_data(callback.from_user.id)
+    if card_data:
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="✏️ Исправить",
+                callback_data=f"att:edit_own:{card_data['session_id']}",
+            )],
+            [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="nav:menu")],
+        ])
+        await callback.message.edit_text(card_data["text"], reply_markup=kb)
+    else:
+        await callback.message.edit_text("Карточка недоступна.", reply_markup=None)
+
+
+async def _render_edit_own_keyboard(callback: CallbackQuery, state: FSMContext) -> None:
+    """Рисует toggle-экран редактирования переклички учителя."""
+    data = await state.get_data()
+    items = data.get("items", {})
+    class_name = data.get("class_name", "?")
+
+    if not items:
+        await callback.message.edit_text(
+            "В классе нет учеников.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="nav:menu")],
+            ]),
+        )
+        return
+
+    kb_rows = []
+    for student_id, item in items.items():
+        icon = "✅" if item["is_present"] else "❌"
+        kb_rows.append([InlineKeyboardButton(
+            text=f"{icon} {item['name']}",
+            callback_data=f"att:edit_toggle:{student_id}",
+        )])
+
+    kb_rows.append([
+        InlineKeyboardButton(text="✅ Сохранить", callback_data="att:edit_save"),
+        InlineKeyboardButton(text="❌ Отменить", callback_data="att:edit_cancel"),
+    ])
+
+    text = (
+        f"✏️ Редактирование переклички — класс {class_name}\n\n"
+        f"✅ — присутствует, ❌ — отсутствует\n"
+        f"Нажмите на ученика, чтобы изменить статус:"
+    )
+    await callback.message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows),
+    )
