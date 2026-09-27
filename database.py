@@ -2,6 +2,7 @@
 from sqlalchemy import (
     create_engine, Column, BigInteger, Integer, String,
     Boolean, DateTime, Date, ForeignKey, UniqueConstraint, Index,
+    JSON,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from datetime import datetime, date
@@ -109,7 +110,26 @@ class AttendanceSession(Base):
     status = Column(String(20), default="active", nullable=False, index=True)
     school_id = Column(Integer, ForeignKey("schools.id", ondelete="CASCADE"), nullable=False, default=1)
 
-    teacher = relationship("Teacher", back_populates="sessions")
+    # ── Multi-teacher: блокировка редактирования ──────────────────────────────
+    # Кто сейчас редактирует сессию (для защиты от одновременной работы).
+    editor_teacher_id = Column(
+        Integer, ForeignKey("teachers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # Когда последний раз была активность редактора (для TTL 3 минуты).
+    editor_locked_at = Column(DateTime, nullable=True)
+
+    # ── Multi-teacher: участники и дедлайн ────────────────────────────────────
+    # JSON-список teacher_id тех, кто уже сделал submit в этой сессии (A, B).
+    participant_ids = Column(JSON, nullable=True)
+    # Момент, после которого сессия считается закрытой для редактирования
+    # (первый submit + EDIT_WINDOW_MINUTES).
+    finalize_at = Column(DateTime, nullable=True)
+    # Флаг «уведомление class_teacher уже отправлено» (для at-least-once retry).
+    notify_sent = Column(Boolean, default=False, nullable=False)
+
+    teacher = relationship("Teacher", back_populates="sessions", foreign_keys=[teacher_id])
+    editor = relationship("Teacher", foreign_keys=[editor_teacher_id], post_update=True)
     class_ = relationship("Class", back_populates="sessions")
     school = relationship("School", back_populates="attendance_sessions")
     records = relationship("AttendanceRecord", back_populates="session", cascade="all, delete-orphan")
@@ -129,6 +149,15 @@ class AttendanceRecord(Base):
     )
     is_present = Column(Boolean, default=True, nullable=False)
     reason = Column(String(255), nullable=True)
+
+    # Multi-teacher: кто из учителей зафиксировал отсутствие ученика.
+    # NULL — ученик не отмечен отсутствующим в partial-режиме.
+    # id — учитель, который перевёл ученика в ❌ в partial-режиме.
+    # Для completed и обычных сессий не используется.
+    marked_by_teacher_id = Column(
+        Integer, ForeignKey("teachers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
 
     session = relationship("AttendanceSession", back_populates="records")
     student = relationship("Student", back_populates="records")

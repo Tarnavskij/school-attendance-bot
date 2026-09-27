@@ -44,6 +44,14 @@ CREATE TABLE IF NOT EXISTS attendance_sessions (
     end_time TIMESTAMP,
     status VARCHAR(20) NOT NULL DEFAULT 'active',
     school_id INTEGER REFERENCES schools(id) ON DELETE CASCADE NOT NULL DEFAULT 1,
+
+    -- Multi-teacher
+    editor_teacher_id INTEGER REFERENCES teachers(id) ON DELETE SET NULL,
+    editor_locked_at TIMESTAMP,
+    participant_ids JSONB,
+    finalize_at TIMESTAMP,
+    notify_sent BOOLEAN NOT NULL DEFAULT FALSE,
+
     UNIQUE (class_id, session_date, school_id)
 );
 CREATE INDEX idx_sessions_date_status ON attendance_sessions(session_date, status);
@@ -53,7 +61,8 @@ CREATE TABLE IF NOT EXISTS attendance_records (
     session_id INTEGER REFERENCES attendance_sessions(id) ON DELETE CASCADE NOT NULL,
     student_id INTEGER REFERENCES students(id) ON DELETE CASCADE NOT NULL,
     is_present BOOLEAN NOT NULL DEFAULT TRUE,
-    reason VARCHAR(255)
+    reason VARCHAR(255),
+    marked_by_teacher_id INTEGER REFERENCES teachers(id) ON DELETE SET NULL
 );
 CREATE INDEX idx_records_session ON attendance_records(session_id);
 CREATE INDEX idx_records_student ON attendance_records(student_id);

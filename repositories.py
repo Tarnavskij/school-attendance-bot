@@ -54,6 +54,7 @@ class RecordDTO:
     student_id: int
     is_present: bool
     reason: str | None
+    marked_by_teacher_id: int | None = None
 
 
 @dataclass
@@ -66,6 +67,11 @@ class SessionDTO:
     absent: list[tuple[str, str | None]]
     school_name: str | None
     status: str = "completed"
+    # ── Multi-teacher ────────────────────────────────────────────────────────
+    participant_ids: list[int] | None = None
+    participant_names: list[str] | None = None
+    finalize_at: datetime | None = None
+    editor_teacher_id: int | None = None
 
 
 @dataclass

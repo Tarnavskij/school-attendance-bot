@@ -25,3 +25,13 @@ SSE_PUBLISH_TOKEN: str = _require("SSE_PUBLISH_TOKEN")
 # Настройки времени автоматической сводки для шеф-повара (по умолчанию 9:00)
 MEAL_DEADLINE_HOUR: int = int(os.getenv("MEAL_DEADLINE_HOUR", "9"))
 MEAL_DEADLINE_MINUTE: int = int(os.getenv("MEAL_DEADLINE_MINUTE", "0"))
+
+# ── Настройки переклички (multi-teacher) ──────────────────────────────────────
+# Окно редактирования после первого submit (в минутах).
+# Учитель-предметник может править свои отметки в течение этого времени.
+EDIT_WINDOW_MINUTES: int = 45
+
+# TTL серверного лока редактирования (в минутах).
+# Если редактор не совершает действий дольше этого времени — лок считается
+# свободным, другой учитель может войти.
+EDIT_LOCK_TTL_MINUTES: int = 3
