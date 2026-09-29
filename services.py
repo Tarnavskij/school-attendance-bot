@@ -62,6 +62,7 @@ class AttendanceService:
         all_records: list[tuple[int, bool, str | None]],
         changed_student_ids: list[int],
         mode: str,
+        skip_deadline: bool = False,
     ) -> tuple[bool, str]:
         """
         Единая точка submit для переклички.
@@ -93,6 +94,7 @@ class AttendanceService:
             changed_student_ids=changed_student_ids,
             target_status=target_status,
             mode=mode,
+            skip_deadline=skip_deadline,
         )
 
         if not ok:

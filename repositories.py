@@ -943,6 +943,7 @@ def save_attendance_transactional(
     changed_student_ids: list[int],
     target_status: str,
     mode: str,
+    skip_deadline: bool = False,
 ) -> tuple[bool, str]:
     """
     Единая атомарная операция сохранения изменений в сессии.
@@ -954,8 +955,10 @@ def save_attendance_transactional(
                             для записи в БД
       changed_student_ids — id учеников, которых текущий учитель явно изменил
                             за этот заход (нужно для ownership)
-      target_status       — "partial" или "completed"
-      mode                — "new_all" | "new_partial" | "partial_join"
+      target_status       — "partial" или "completed" (игнорируется при mode="edit")
+      mode                — "new_all" | "new_partial" | "partial_join" | "edit"
+      skip_deadline       — True для class_teacher (у него окно до 20:00,
+                            без 45-минутного ограничения)
 
     Возвращает (True, "") при успехе или (False, причина):
       - "session_not_found"
@@ -977,14 +980,17 @@ def save_attendance_transactional(
             if s.editor_locked_at is not None and s.editor_locked_at >= cutoff:
                 return False, "lock_busy"
 
-        # 2) Deadline
-        if s.finalize_at is not None and now >= s.finalize_at:
-            return False, "deadline_expired"
+        # 2) Deadline (пропускается для class_teacher)
+        if not skip_deadline:
+            if s.finalize_at is not None and now >= s.finalize_at:
+                return False, "deadline_expired"
 
         # 3) Статус
         if mode in ("new_all", "new_partial") and s.status != "active":
             return False, "session_closed"
         if mode == "partial_join" and s.status != "partial":
+            return False, "session_closed"
+        if mode == "edit" and s.status not in ("partial", "completed"):
             return False, "session_closed"
 
         # 4) Применяем all_records
@@ -1018,21 +1024,23 @@ def save_attendance_transactional(
                 synchronize_session=False,
             )
 
-        # 7) participant_ids
-        pids = list(s.participant_ids or [])
-        if teacher_id not in pids:
-            pids.append(teacher_id)
-        s.participant_ids = pids
+        # 7) participant_ids — не добавляем при edit
+        if mode != "edit":
+            pids = list(s.participant_ids or [])
+            if teacher_id not in pids:
+                pids.append(teacher_id)
+            s.participant_ids = pids
 
-        # 8) Статус, end_time, finalize_at
-        s.status = target_status
-        if target_status == "completed":
-            s.end_time = now
-            if s.finalize_at is None:
-                s.finalize_at = now + timedelta(minutes=EDIT_WINDOW_MINUTES)
-        else:
-            if s.finalize_at is None:
-                s.finalize_at = now + timedelta(minutes=EDIT_WINDOW_MINUTES)
+        # 8) Статус, end_time, finalize_at — не меняем при edit
+        if mode != "edit":
+            s.status = target_status
+            if target_status == "completed":
+                s.end_time = now
+                if s.finalize_at is None:
+                    s.finalize_at = now + timedelta(minutes=EDIT_WINDOW_MINUTES)
+            else:
+                if s.finalize_at is None:
+                    s.finalize_at = now + timedelta(minutes=EDIT_WINDOW_MINUTES)
 
         # 9) Снимаем lock — всё в одной транзакции
         s.editor_teacher_id = None
