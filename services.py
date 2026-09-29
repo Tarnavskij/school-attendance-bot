@@ -161,15 +161,29 @@ class ReportService:
 
     @staticmethod
     async def finalize_day(bot: Bot) -> None:
-        # В этом методе нет school_id, так как он используется только для администратора (школа не важна)
-        # Но get_active_sessions теперь требует school_id. Как быть?
-        # Нужно получить school_id для администратора. Можно использовать DEFAULT_SCHOOL_ID или пройти по всем школам.
-        # Здесь мы используем get_all_schools() и для каждой школы завершаем сессии.
+        """
+        Cron-джоб 20:00.
+
+        Порядок (важно!):
+          1. Закрыть все partial → completed (с уведомлениями).
+          2. Закрыть все active → auto_completed (без уведомлений).
+          3. Только после этого отправить административный отчёт.
+
+        Если не сделать в таком порядке, отчёт будет построен по неполным
+        данным (partial ещё висят).
+        """
         from repositories import get_all_schools, get_active_sessions, finish_session
+
+        # 1) partial → completed через общую логику
+        await ReportService.close_partial_sessions(bot)
+
+        # 2) active → auto_completed (без уведомления)
         schools = get_all_schools()
         for school in schools:
             for session in get_active_sessions(date.today(), school["id"]):
                 finish_session(session.id, auto=True)
+
+        # 3) административный отчёт — по свежим данным
         await ReportService.send_report(bot)
 
     @staticmethod
