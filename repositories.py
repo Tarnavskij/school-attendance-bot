@@ -829,6 +829,48 @@ def get_teacher_session_today(teacher_id: int, today_date: date,
             editor_teacher_id=target.editor_teacher_id,
         )
 
+# ── Multi-teacher: данные для уведомления class_teacher ──────────────────────
+
+def get_session_notification_data(session_id: int) -> dict | None:
+    """
+    Возвращает всё, что нужно для уведомления class_teacher:
+      {
+        "class_id": int,
+        "class_name": str,
+        "school_id": int,
+        "teacher_id": int | None,
+        "participant_ids": list[int],
+        "participant_names": list[str],
+        "absent": list[tuple[str, str | None]],
+      }
+    Или None, если сессии нет.
+    """
+    with get_db() as db:
+        s = db.query(AttendanceSession).options(
+            joinedload(AttendanceSession.class_),
+            joinedload(AttendanceSession.records).joinedload(AttendanceRecord.student),
+        ).filter(AttendanceSession.id == session_id).first()
+        if not s:
+            return None
+
+        pids = list(s.participant_ids or [])
+        participant_names: list[str] = []
+        if pids:
+            ts = db.query(Teacher).filter(Teacher.id.in_(pids)).all()
+            names_by_id = {t.id: t.name for t in ts}
+            for tid in pids:
+                participant_names.append(names_by_id.get(tid, f"Учитель #{tid}"))
+
+        return {
+            "class_id": s.class_id,
+            "class_name": s.class_.name if s.class_ else "?",
+            "school_id": s.school_id,
+            "teacher_id": s.teacher_id,
+            "participant_ids": pids,
+            "participant_names": participant_names,
+            "absent": [(r.student.name, r.reason) for r in s.records if not r.is_present],
+        }
+
 # ── Multi-teacher: участники сессии ──────────────────────────────────────────
 
 def add_participant(session_id: int, teacher_id: int) -> None:
