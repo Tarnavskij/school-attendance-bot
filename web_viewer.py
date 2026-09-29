@@ -125,16 +125,41 @@ def _load_sessions(date_str: str, school_id: int) -> list:
             )
             .filter(
                 AttendanceSession.session_date == date_str,
-                AttendanceSession.status.in_(["completed", "auto_completed"]),
+                AttendanceSession.status.in_(["partial", "completed", "auto_completed"]),
                 AttendanceSession.school_id == school_id,
             )
             .all()
         )
+
+        # Собираем имена всех participant_ids одним запросом
+        all_pids: set[int] = set()
+        for s in sessions:
+            for pid in (s.participant_ids or []):
+                all_pids.add(pid)
+
+        names_by_id: dict[int, str] = {}
+        if all_pids:
+            teachers = db.query(Teacher).filter(Teacher.id.in_(all_pids)).all()
+            names_by_id = {t.id: t.name for t in teachers}
+
         result = []
         for s in sessions:
+            # Имена участников из participant_ids
+            participant_ids = list(s.participant_ids or [])
+            participant_names = [
+                names_by_id.get(pid, f"Учитель #{pid}")
+                for pid in participant_ids
+            ]
+
+            # Если список участников пуст, но есть teacher_id — используем его
+            if not participant_names and s.teacher:
+                participant_names = [s.teacher.name]
+
             result.append({
                 "teacher": s.teacher.name if s.teacher else "?",
+                "teachers": ", ".join(participant_names) if participant_names else "—",
                 "class": s.class_.name if s.class_ else "?",
+                "status": s.status,
                 "end_time": s.end_time,
                 "absent": [
                     (r.student.name, r.reason)
@@ -173,7 +198,9 @@ def api_summary():
             absent_text = "нет"
         rows.append({
             "teacher": escape(s["teacher"]),
+            "teachers": escape(s.get("teachers") or s["teacher"]),
             "class": escape(s["class"]),
+            "status": s.get("status", "completed"),
             "absent": absent_text,
             "time": s["end_time"].strftime("%H:%M") if s["end_time"] else "",
         })
@@ -338,7 +365,9 @@ def index():
             absent_text = "нет"
         rows.append({
             "teacher": escape(s["teacher"]),
+            "teachers": escape(s.get("teachers") or s["teacher"]),
             "class": escape(s["class"]),
+            "status": s.get("status", "completed"),
             "absent": absent_text,
             "time": s["end_time"].strftime("%H:%M") if s["end_time"] else "",
         })
@@ -527,6 +556,15 @@ def import_students_route(school_id: int):
     )
 
 
+def _status_human(status: str) -> str:
+    """Человекочитаемый статус для Excel."""
+    return {
+        "partial": "частично",
+        "completed": "завершена",
+        "auto_completed": "завершена автоматически",
+    }.get(status, status)
+
+
 @app.route("/download_excel")
 @require_auth
 def download_excel():
@@ -538,7 +576,7 @@ def download_excel():
     wb = Workbook()
     ws = wb.active
     ws.title = f"Сводка {date_str}"
-    headers = ["Учитель", "Класс", "Отсутствуют (причина)", "Время завершения"]
+    headers = ["Учитель", "Учителя", "Класс", "Статус", "Отсутствуют (причина)", "Время завершения"]
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
         cell.font = Font(bold=True)
@@ -549,7 +587,9 @@ def download_excel():
         ) if s["absent"] else "нет"
         ws.append([
             excel_safe(s["teacher"]),
+            excel_safe(s.get("teachers") or s["teacher"]),
             excel_safe(s["class"]),
+            _status_human(s.get("status", "completed")),
             excel_safe(absent_text),
             s["end_time"].strftime("%H:%M") if s["end_time"] else "",
         ])

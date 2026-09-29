@@ -104,6 +104,8 @@
   .badge-approved { background: rgba(52,199,89,0.15);  color: #34c759; border: 1px solid rgba(52,199,89,0.3); }
   .badge-rejected { background: rgba(255,69,58,0.15);  color: #ff453a; border: 1px solid rgba(255,69,58,0.3); }
   .badge-already  { background: rgba(255,159,10,0.15); color: #ff9f0a; border: 1px solid rgba(255,159,10,0.3); }
+  .badge-partial  { background: rgba(255,159,10,0.15); color: #ff9f0a; border: 1px solid rgba(255,159,10,0.3); }
+  .badge-auto     { background: rgba(120,120,120,0.15); color: #999; border: 1px solid rgba(120,120,120,0.3); }
   .empty { text-align: center; padding: 60px 20px; color: rgba(255,255,255,0.3); font-size: 15px; }
   .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 24px; }
   .stat-card {
@@ -246,11 +248,21 @@
   <div class="glass" id="summary-table-container">
     {% if data %}
     <table>
-      <tr><th>Учитель</th><th>Класс</th><th>Отсутствуют (причина)</th><th>Время</th></tr>
+      <tr><th>Учитель</th><th>Учителя</th><th>Класс</th><th>Статус</th><th>Отсутствуют (причина)</th><th>Время</th></tr>
       {% for row in data %}
       <tr>
         <td>{{ row.teacher }}</td>
+        <td>{{ row.teachers }}</td>
         <td>{{ row.class }}</td>
+        <td>
+          {% if row.status == 'partial' %}
+            <span class="badge badge-partial">⏳ частично</span>
+          {% elif row.status == 'auto_completed' %}
+            <span class="badge badge-auto">🔒 автозакрытие</span>
+          {% else %}
+            <span class="badge badge-approved">✓ завершена</span>
+          {% endif %}
+        </td>
         <td style="white-space:pre-line">{{ row.absent }}</td>
         <td style="color:rgba(255,255,255,0.4)">{{ row.time }}</td>
       </tr>
@@ -300,14 +312,26 @@
         statsContainer.innerHTML = '';
       }
       if (json.data && json.data.length > 0) {
-        let rows = json.data.map(row => `<tr>
-          <td>${escapeHtml(row.teacher)}</td>
-          <td>${escapeHtml(row.class)}</td>
-          <td style="white-space:pre-line">${escapeHtml(row.absent)}</td>
-          <td style="color:rgba(255,255,255,0.4)">${escapeHtml(row.time)}</td>
-        </tr>`).join('');
+        let rows = json.data.map(row => {
+          let statusHtml;
+          if (row.status === 'partial') {
+            statusHtml = '<span class="badge badge-partial">⏳ частично</span>';
+          } else if (row.status === 'auto_completed') {
+            statusHtml = '<span class="badge badge-auto">🔒 автозакрытие</span>';
+          } else {
+            statusHtml = '<span class="badge badge-approved">✓ завершена</span>';
+          }
+          return `<tr>
+            <td>${escapeHtml(row.teacher)}</td>
+            <td>${escapeHtml(row.teachers || row.teacher)}</td>
+            <td>${escapeHtml(row.class)}</td>
+            <td>${statusHtml}</td>
+            <td style="white-space:pre-line">${escapeHtml(row.absent)}</td>
+            <td style="color:rgba(255,255,255,0.4)">${escapeHtml(row.time)}</td>
+          </tr>`;
+        }).join('');
         tableContainer.innerHTML = `<table>
-          <tr><th>Учитель</th><th>Класс</th><th>Отсутствуют (причина)</th><th>Время</th></tr>
+          <tr><th>Учитель</th><th>Учителя</th><th>Класс</th><th>Статус</th><th>Отсутствуют (причина)</th><th>Время</th></tr>
           ${rows}
         </table>`;
       } else {
