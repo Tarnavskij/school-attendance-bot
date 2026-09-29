@@ -21,7 +21,7 @@ class AttendanceService:
         # teacher_school_id теперь обязателен
         school_id = teacher_school_id
 
-        if class_id not in {c.id for c in get_available_classes(date.today(), school_id=school_id)}:
+        if class_id not in {c.id for c in get_available_classes(date.today(), school_id=school_id, teacher_id=teacher.id)}:
             return None, "Этот класс уже занят или недоступен."
 
         try:

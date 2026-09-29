@@ -65,7 +65,7 @@ async def start_attendance(message: Message, state: FSMContext) -> None:
     else:
         school_id = teacher.school_id
 
-    available = get_available_classes(date.today(), school_id=school_id)
+    available = get_available_classes(date.today(), school_id=school_id, teacher_id=teacher.id)
     if not available:
         await message.answer("Все классы уже отмечены на сегодня.")
         return
