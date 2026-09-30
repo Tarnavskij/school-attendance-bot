@@ -1,4 +1,6 @@
 # repositories.py
+import json
+import json
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -82,6 +84,28 @@ class CreatedSession:
 
 class SessionAlreadyExists(Exception):
     pass
+
+def _parse_participant_ids(raw) -> list[int]:
+    """
+    Приводит participant_ids к списку int.
+
+    Может прийти:
+      - None       → []
+      - list[int]  → как есть
+      - str        → json.loads (например, '[2, 8]')
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [int(x) for x in raw]
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [int(x) for x in parsed]
+        except (ValueError, TypeError):
+            pass
+    return []
 
 
 # ===== Учителя (требуют school_id) =====
@@ -281,7 +305,7 @@ def get_available_classes(today_date: date, school_id: int, teacher_id: int) -> 
                 continue
 
             if s.status == "partial":
-                participant_ids = list(s.participant_ids or [])
+                participant_ids = _parse_participant_ids(s.participant_ids)
                 if teacher_id in participant_ids:
                     continue
                 if s.teacher_id == teacher_id:
@@ -504,8 +528,8 @@ def get_class_session_today(class_id: int, target_date: date, school_id: int) ->
         if not sess:
             return None
 
-        # Собираем participant_ids (JSON-поле может быть None)
-        participant_ids: list[int] = list(sess.participant_ids or [])
+        # Собираем participant_ids (JSON-поле может быть None или строкой)
+        participant_ids: list[int] = _parse_participant_ids(sess.participant_ids)
 
         # Имена участников — одним запросом
         participant_names: list[str] = []
@@ -796,7 +820,7 @@ def get_teacher_session_today(teacher_id: int, today_date: date,
             if s.teacher_id == teacher_id:
                 target = s
                 break
-            pids = s.participant_ids or []
+            pids = _parse_participant_ids(s.participant_ids)
             if teacher_id in pids:
                 target = s
                 break
@@ -813,7 +837,7 @@ def get_teacher_session_today(teacher_id: int, today_date: date,
             absent=[(r.student.name, r.reason) for r in target.records if not r.is_present],
             school_name=target.school.name if target.school else None,
             status=target.status,
-            participant_ids=list(target.participant_ids or []),
+            participant_ids=_parse_participant_ids(target.participant_ids),
             finalize_at=target.finalize_at,
             editor_teacher_id=target.editor_teacher_id,
         )
@@ -842,7 +866,7 @@ def get_session_notification_data(session_id: int) -> dict | None:
         if not s:
             return None
 
-        pids = list(s.participant_ids or [])
+        pids = _parse_participant_ids(s.participant_ids)
         participant_names: list[str] = []
         if pids:
             ts = db.query(Teacher).filter(Teacher.id.in_(pids)).all()
@@ -872,7 +896,7 @@ def add_participant(session_id: int, teacher_id: int) -> None:
         s = db.query(AttendanceSession).filter(AttendanceSession.id == session_id).first()
         if not s:
             return
-        pids = list(s.participant_ids or [])
+        pids = _parse_participant_ids(s.participant_ids)
         if teacher_id in pids:
             return
         # Защита от «3+ участников» — как решили в ТЗ, сейчас не поддерживаем
@@ -1015,7 +1039,7 @@ def save_attendance_transactional(
 
         # 7) participant_ids — не добавляем при edit
         if mode != "edit":
-            pids = list(s.participant_ids or [])
+            pids = _parse_participant_ids(s.participant_ids)
             if teacher_id not in pids:
                 pids.append(teacher_id)
             s.participant_ids = pids
