@@ -79,10 +79,16 @@ class AttendanceService:
           - notify_web("summary_update") при успехе
           - notify_class_teacher при переходе в completed
         """
-        # Целевой статус
+        # Целевой статус.
+        # При mode="edit" фактический статус сессии не меняется —
+        # save_attendance_transactional не трогает status при edit.
+        # Передаём "partial" как нейтральную заглушку, чтобы не сработал
+        # блок обнуления ownership для completed.
         if mode in ("new_all", "partial_join"):
             target_status = "completed"
         elif mode == "new_partial":
+            target_status = "partial"
+        elif mode == "edit":
             target_status = "partial"
         else:
             return False, "invalid_mode"
