@@ -6,6 +6,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
+from aiogram.types import ErrorEvent
 
 from config import BOT_TOKEN, SSE_PUBLISH_TOKEN, MEAL_DEADLINE_HOUR, MEAL_DEADLINE_MINUTE, ADMIN_TELEGRAM_ID, DEFAULT_SCHOOL_ID
 from services import ReportService
@@ -108,14 +109,14 @@ async def main() -> None:
 
     # Глобальный обработчик ошибок
     @dp.errors()
-    async def error_handler(update, exception):
+    async def error_handler(event: ErrorEvent):
         logger.error(
             "Ошибка в боте",
-            exc_info=exception,
-            update=update,
+            exc_info=event.exception,
+            update=event.update,
         )
-        update_repr = str(update)[:200]
-        await notify_admin_error(bot, str(exception), update_repr)
+        update_repr = str(event.update)[:200]
+        await notify_admin_error(bot, str(event.exception), update_repr)
         return True
 
     dp.include_router(registration_router)

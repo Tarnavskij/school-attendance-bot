@@ -245,14 +245,12 @@ def get_available_classes(today_date: date, school_id: int, teacher_id: int) -> 
       - completed / auto_completed → НЕ показывать.
     """
     with get_db() as db:
-        # Все классы школы
         all_classes = (
             db.query(Class)
             .filter(Class.school_id == school_id)
             .order_by(Class.grade, Class.letter)
             .all()
         )
-        # Все сегодняшние сессии школы
         sessions = (
             db.query(AttendanceSession)
             .filter(
@@ -262,48 +260,39 @@ def get_available_classes(today_date: date, school_id: int, teacher_id: int) -> 
             .all()
         )
 
-    # Разбор сессий по классам
-    sessions_by_class: dict[int, list] = {}
-    for s in sessions:
-        sessions_by_class.setdefault(s.class_id, []).append(s)
+        sessions_by_class: dict[int, list] = {}
+        for s in sessions:
+            sessions_by_class.setdefault(s.class_id, []).append(s)
 
-    result: list[ClassDTO] = []
-    for c in all_classes:
-        cls_sessions = sessions_by_class.get(c.id, [])
+        result: list[ClassDTO] = []
+        for c in all_classes:
+            cls_sessions = sessions_by_class.get(c.id, [])
 
-        # Нет сессии → доступен
-        if not cls_sessions:
-            result.append(ClassDTO(
-                id=c.id, name=c.name, school_id=c.school_id,
-                grade=c.grade, letter=c.letter,
-            ))
-            continue
-
-        # Есть хотя бы одна сессия. Берём её (за сегодня их не может быть > 1 по UNIQUE,
-        # но список — на всякий случай).
-        s = cls_sessions[0]
-
-        if s.status == "active":
-            # Занят кем-то — никому не показываем
-            continue
-
-        if s.status == "partial":
-            # Показываем только тем, кто не участвовал
-            participant_ids = s.participant_ids or []
-            if teacher_id in participant_ids:
+            if not cls_sessions:
+                result.append(ClassDTO(
+                    id=c.id, name=c.name, school_id=c.school_id,
+                    grade=c.grade, letter=c.letter,
+                ))
                 continue
-            if s.teacher_id == teacher_id:
+
+            s = cls_sessions[0]
+
+            if s.status == "active":
                 continue
-            result.append(ClassDTO(
-                id=c.id, name=c.name, school_id=c.school_id,
-                grade=c.grade, letter=c.letter,
-            ))
-            continue
 
-        # completed / auto_completed / что-то ещё — не показываем
-        continue
+            if s.status == "partial":
+                participant_ids = list(s.participant_ids or [])
+                if teacher_id in participant_ids:
+                    continue
+                if s.teacher_id == teacher_id:
+                    continue
+                result.append(ClassDTO(
+                    id=c.id, name=c.name, school_id=c.school_id,
+                    grade=c.grade, letter=c.letter,
+                ))
+                continue
 
-    return result
+        return result
 
 
 def get_students_by_class(class_id: int, school_id: int) -> list[StudentDTO]:
