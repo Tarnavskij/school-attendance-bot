@@ -4,6 +4,9 @@ import aiohttp
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.interval import IntervalTrigger
+
+from aiogram.types import ErrorEvent
 
 from config import BOT_TOKEN, SSE_PUBLISH_TOKEN, MEAL_DEADLINE_HOUR, MEAL_DEADLINE_MINUTE, ADMIN_TELEGRAM_ID, DEFAULT_SCHOOL_ID
 from services import ReportService
@@ -106,14 +109,14 @@ async def main() -> None:
 
     # Глобальный обработчик ошибок
     @dp.errors()
-    async def error_handler(update, exception):
+    async def error_handler(event: ErrorEvent):
         logger.error(
             "Ошибка в боте",
-            exc_info=exception,
-            update=update,
+            exc_info=event.exception,
+            update=event.update,
         )
-        update_repr = str(update)[:200]
-        await notify_admin_error(bot, str(exception), update_repr)
+        update_repr = str(event.update)[:200]
+        await notify_admin_error(bot, str(event.exception), update_repr)
         return True
 
     dp.include_router(registration_router)
@@ -159,6 +162,29 @@ async def main() -> None:
     # --- Конец интеграции ---
 
     scheduler = AsyncIOScheduler()
+
+    # ── Multi-teacher: расписание ─────────────────────────────────────────────
+    # 1. Каждую минуту — обработка просроченных finalize_at.
+    #    Закрывает partial → completed, ретраит уведомления (notify_sent=False).
+    scheduler.add_job(
+        ReportService.finalize_due_sessions,
+        IntervalTrigger(minutes=1),
+        kwargs={"bot": bot},
+        misfire_grace_time=30,
+    )
+
+    # 2. 10:00 — закрыть все partial → completed.
+    scheduler.add_job(
+        ReportService.close_partial_sessions,
+        "cron",
+        hour=10,
+        minute=0,
+        kwargs={"bot": bot},
+        misfire_grace_time=60,
+    )
+
+    # 3. 20:00 — генеральная уборка: partial → completed, active → auto_completed,
+    #    затем административный отчёт.
     scheduler.add_job(
         ReportService.finalize_day,
         "cron",
@@ -167,6 +193,8 @@ async def main() -> None:
         kwargs={"bot": bot},
         misfire_grace_time=60,
     )
+
+    # 4. Отправка сводки питания шеф-поварам (как было)
     scheduler.add_job(
         send_meal_summaries_to_chefs,
         "cron",
@@ -175,6 +203,7 @@ async def main() -> None:
         kwargs={"bot": bot},
         misfire_grace_time=60,
     )
+
     scheduler.start()
     logger.info("Scheduler started.")
 

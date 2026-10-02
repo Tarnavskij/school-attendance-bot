@@ -127,12 +127,19 @@ async def reset_execute(callback: CallbackQuery) -> None:
     )
     await callback.answer()
 
+def _status_human(status: str) -> str:
+    """Человекочитаемый статус для Excel."""
+    return {
+        "partial": "частично",
+        "completed": "завершена",
+        "auto_completed": "завершена автоматически",
+    }.get(status, status)
 
 def _build_excel(sessions, date_str: str) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = f"Сводка {date_str}"
-    headers = ["Учитель", "Класс", "Отсутствуют", "Причины", "Время завершения"]
+    headers = ["Учитель", "Учителя", "Класс", "Статус", "Отсутствуют", "Причины", "Время завершения"]
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
         cell.font = Font(bold=True)
@@ -141,9 +148,16 @@ def _build_excel(sessions, date_str: str) -> bytes:
         absent_str = ", ".join(n for n, _ in sess.absent) if sess.absent else "нет"
         reasons_str = ", ".join(r or "—" for _, r in sess.absent) if sess.absent else ""
         end_time = sess.end_time.strftime("%H:%M") if sess.end_time else ""
+
+        # Учителя: participant_names если есть, иначе teacher_name
+        pnames = getattr(sess, "participant_names", None) or []
+        teachers_str = ", ".join(pnames) if pnames else sess.teacher_name
+
         ws.append([
             excel_safe(sess.teacher_name),
+            excel_safe(teachers_str),
             excel_safe(sess.class_name),
+            _status_human(getattr(sess, "status", "completed")),
             excel_safe(absent_str),
             excel_safe(reasons_str),
             end_time,
