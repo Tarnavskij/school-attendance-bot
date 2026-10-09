@@ -2,6 +2,7 @@
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
+from sqlalchemy import extract
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 from database import SessionLocal, Teacher, Class, Student, AttendanceSession, AttendanceRecord, RegistrationRequest, \
@@ -900,6 +901,100 @@ def get_class_meal_summary(class_id: int, school_id: int,
         paid = sum(1 for i in eating_items if i.meal_type == "paid")
         free = total - paid
         return f"🔄 Обновление {req.class_.name}: всего {total} (платно {paid}, бесплатно {free})"
+
+# ===== Охват питания =====
+
+_MONTH_NAMES_RU = [
+    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+]
+
+
+def get_meal_coverage_months(school_id: int) -> list[dict]:
+    """
+    Список месяцев, в которых есть завершённые переклички.
+    Сортировка — от новых к старым.
+    Формат: [{"year": 2025, "month": 9, "label": "Сентябрь 2025"}, ...]
+    """
+    with get_db() as db:
+        rows = (
+            db.query(
+                extract("year", AttendanceSession.session_date).label("y"),
+                extract("month", AttendanceSession.session_date).label("m"),
+            )
+            .filter(
+                AttendanceSession.school_id == school_id,
+                AttendanceSession.status.in_(["completed", "auto_completed"]),
+            )
+            .distinct()
+            .all()
+        )
+    seen = {(int(y), int(m)) for y, m in rows if y and m}
+    return [
+        {"year": y, "month": m, "label": f"{_MONTH_NAMES_RU[m - 1]} {y}"}
+        for (y, m) in sorted(seen, reverse=True)
+    ]
+
+
+def get_meal_coverage(year: int, month: int, school_id: int) -> dict:
+    """
+    Коэффициенты охвата питания за месяц, отдельно для начальной (1–4)
+    и старшей (5–11) школы:
+      дни = число уникальных дат с завершённой перекличкой в этой группе
+      отсутствия = сумма AttendanceRecord.is_present == False по этим сессиям
+      коэффициент = отсутствия / дни
+    """
+    label = f"{_MONTH_NAMES_RU[month - 1]} {year}"
+
+    primary_dates: set = set()
+    senior_dates: set = set()
+    primary_absences = 0
+    senior_absences = 0
+
+    with get_db() as db:
+        sessions = (
+            db.query(AttendanceSession)
+            .options(
+                joinedload(AttendanceSession.records),
+                joinedload(AttendanceSession.class_),
+            )
+            .filter(
+                AttendanceSession.school_id == school_id,
+                AttendanceSession.status.in_(["completed", "auto_completed"]),
+                extract("year", AttendanceSession.session_date) == year,
+                extract("month", AttendanceSession.session_date) == month,
+            )
+            .all()
+        )
+
+        for s in sessions:
+            grade = s.class_.grade if s.class_ else 0
+            absences = sum(1 for r in s.records if not r.is_present)
+            if grade and 1 <= grade <= 4:
+                primary_dates.add(s.session_date)
+                primary_absences += absences
+            else:
+                senior_dates.add(s.session_date)
+                senior_absences += absences
+
+    days_primary = len(primary_dates)
+    days_senior = len(senior_dates)
+    coef_primary = primary_absences / days_primary if days_primary else 0.0
+    coef_senior = senior_absences / days_senior if days_senior else 0.0
+
+    return {
+        "year": year, "month": month, "label": label,
+        "primary": {
+            "days": days_primary,
+            "absences": primary_absences,
+            "coefficient": coef_primary,
+        },
+        "senior": {
+            "days": days_senior,
+            "absences": senior_absences,
+            "coefficient": coef_senior,
+        },
+    }
 
 
 # ===== Школы (глобальные) =====

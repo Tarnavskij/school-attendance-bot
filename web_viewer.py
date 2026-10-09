@@ -28,10 +28,10 @@ app.secret_key = FLASK_SECRET_KEY
 csrf = CSRFProtect(app)
 
 app.config.update(
-    SESSION_COOKIE_SECURE=True,      # cookie передаётся только по HTTPS
-    SESSION_COOKIE_HTTPONLY=True,    # cookie недоступна из JS
+    SESSION_COOKIE_SECURE=os.getenv("FLASK_SECURE_COOKIES", "1") == "1",
+    SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
-    MAX_CONTENT_LENGTH=10 * 1024 * 1024,  # лимит 10 МБ на входящий запрос (см. Задачу 14)
+    MAX_CONTENT_LENGTH=10 * 1024 * 1024,
 )
 
 
@@ -699,6 +699,40 @@ def meals_page():
         current_school_id=school_id,
         current_school_name=school_name,
         sse_token=sse_token,
+    )
+
+
+@app.route("/meals/coverage")
+@require_auth
+def meals_coverage_list():
+    from repositories import get_meal_coverage_months
+    school_id = get_web_school_id()
+    school_name = get_school_name(school_id)
+    months = get_meal_coverage_months(school_id)
+    return render_template(
+        "index.html", page="coverage_list",
+        months=months,
+        pending_count=_pending_count(school_id),
+        current_school_id=school_id,
+        current_school_name=school_name,
+    )
+
+
+@app.route("/meals/coverage/<int:year>/<int:month>")
+@require_auth
+def meals_coverage_detail(year: int, month: int):
+    from repositories import get_meal_coverage
+    if not (1 <= month <= 12):
+        return redirect(url_for("meals_coverage_list"))
+    school_id = get_web_school_id()
+    school_name = get_school_name(school_id)
+    data = get_meal_coverage(year, month, school_id)
+    return render_template(
+        "index.html", page="coverage_detail",
+        coverage=data,
+        pending_count=_pending_count(school_id),
+        current_school_id=school_id,
+        current_school_name=school_name,
     )
 
 
