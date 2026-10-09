@@ -215,7 +215,7 @@
       <span style="background:#ff453a;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:4px;">{{ pending_count }}</span>
     {% endif %}
   </a>
-<a href="/meals" class="{{ 'active' if page == 'meals' else '' }}">🍽️ Питание</a>
+<a href="/meals" class="{{ 'active' if page in ['meals', 'coverage_list', 'coverage_detail'] else '' }}">🍽️ Питание</a>
 <a href="/attendance" class="{{ 'active' if page == 'attendance' else '' }}">📅 График</a>
 <a href="/schools" class="{{ 'active' if page == 'schools' else '' }}">📥 Импорт</a>
   <span class="school-name" id="schoolNameNav">🏫 {{ current_school_name }}</span>
@@ -536,6 +536,7 @@
       </form>
       <a href="/download_meal_excel?date={{ date }}&type=short" class="btn btn-primary">📥 Краткий Excel</a>
       <a href="/download_meal_excel?date={{ date }}&type=full" class="btn btn-primary">📥 Полный Excel</a>
+      <a href="/meals/coverage" class="btn btn-primary">📊 Охват питания</a>
     </div>
   </div>
 
@@ -752,6 +753,100 @@
       bindMealRowEvents();
     }
   </script>
+
+{% elif page == 'coverage_list' %}
+  <div class="page-title">📊 Охват питания</div>
+  <div class="glass">
+    <p style="margin-top:0; color:rgba(255,255,255,0.6);">
+      Выберите месяц, чтобы увидеть среднее число отсутствующих учеников в день.
+    </p>
+    {% if months %}
+    <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:12px; margin-top:16px;">
+      {% for m in months %}
+      <a href="/meals/coverage/{{ m.year }}/{{ m.month }}" class="btn btn-primary" style="justify-content:center;">
+        {{ m.label }}
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">Нет данных о перекличках</div>
+    {% endif %}
+    <div style="margin-top:24px;">
+      <a href="/meals" class="btn btn-sm btn-danger">← Назад к питанию</a>
+    </div>
+  </div>
+
+{% elif page == 'coverage_detail' %}
+  <div class="page-title">📊 Охват питания — {{ coverage.label }}</div>
+
+  <div class="glass">
+    <h3 style="margin-top:0; color:rgba(52,199,89,0.9);">🟢 1–4 классы</h3>
+    {% if coverage.primary.days == 0 %}
+      <div class="empty">Нет перекличек за этот месяц</div>
+    {% else %}
+      <div class="stats" style="grid-template-columns:repeat(3, 1fr);">
+        <div class="stat-card">
+          <div class="stat-number">{{ coverage.primary.days }}</div>
+          <div class="stat-label">Учебных дней</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">{{ coverage.primary.absences }}</div>
+          <div class="stat-label">Всего отсутствий</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">{{ "%.1f"|format(coverage.primary.coefficient)|replace(".", ",") }}</div>
+          <div class="stat-label">Учеников в день</div>
+        </div>
+      </div>
+      <div style="text-align:center; margin-top:20px; font-size:20px; font-weight:600;">
+        Среднее значение:
+        <span style="background:linear-gradient(135deg,#34c759,#30d158); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
+          {{ "%.1f"|format(coverage.primary.coefficient)|replace(".", ",") }} ученика в день
+        </span>
+      </div>
+      <div style="text-align:center; margin-top:8px; font-size:13px; color:rgba(255,255,255,0.4);">
+        {{ coverage.primary.absences }} отсутствий за {{ coverage.primary.days }} учебных дней
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="glass">
+    <h3 style="margin-top:0; color:rgba(96,165,250,0.9);">🔵 5–11 классы</h3>
+    {% if coverage.senior.days == 0 %}
+      <div class="empty">Нет перекличек за этот месяц</div>
+    {% else %}
+      <div class="stats" style="grid-template-columns:repeat(3, 1fr);">
+        <div class="stat-card">
+          <div class="stat-number">{{ coverage.senior.days }}</div>
+          <div class="stat-label">Учебных дней</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">{{ coverage.senior.absences }}</div>
+          <div class="stat-label">Всего отсутствий</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-number">{{ "%.1f"|format(coverage.senior.coefficient)|replace(".", ",") }}</div>
+          <div class="stat-label">Учеников в день</div>
+        </div>
+      </div>
+      <div style="text-align:center; margin-top:20px; font-size:20px; font-weight:600;">
+        Среднее значение:
+        <span style="background:linear-gradient(135deg,#60a5fa,#0a84ff); -webkit-background-clip:text; -webkit-text-fill-color:transparent;">
+          {{ "%.1f"|format(coverage.senior.coefficient)|replace(".", ",") }} ученика в день
+        </span>
+      </div>
+      <div style="text-align:center; margin-top:8px; font-size:13px; color:rgba(255,255,255,0.4);">
+        {{ coverage.senior.absences }} отсутствий за {{ coverage.senior.days }} учебных дней
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="glass">
+    <div style="display:flex; gap:10px; flex-wrap:wrap;">
+      <a href="/meals/coverage" class="btn btn-sm btn-danger">← К списку месяцев</a>
+      <a href="/meals" class="btn btn-sm" style="background:rgba(255,255,255,0.1); color:#fff;">🍽️ К питанию</a>
+    </div>
+  </div>
 
 {% elif page == 'schools' %}
   <div class="page-title">📥 Импорт учеников</div>

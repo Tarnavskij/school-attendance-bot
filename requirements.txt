@@ -7,3 +7,4 @@ flask==3.0.3
 psycopg2-binary==2.9.12
 pymysql==1.1.0
 flask-wtf==1.2.1
+structlog==26.1.0
