@@ -275,6 +275,7 @@
     }
 
     const summarySource = new EventSource('/stream?token={{ sse_token }}');
+    window.addEventListener('pagehide', () => summarySource.close());
     summarySource.addEventListener('summary_update', async (e) => {
       try {
         const params = new URLSearchParams(window.location.search);
@@ -430,6 +431,7 @@
     const CSRF_TOKEN = "{{ csrf_token() }}";
 
     const reqSource = new EventSource('/stream?token={{ sse_token }}');
+    window.addEventListener('pagehide', () => reqSource.close());
     reqSource.addEventListener('requests_update', async () => {
       try {
         const resp = await fetch('/api/requests');
@@ -663,6 +665,7 @@
     bindMealRowEvents();
 
     const mealsSource = new EventSource('/stream?token={{ sse_token }}');
+    window.addEventListener('pagehide', () => mealsSource.close());
     mealsSource.addEventListener('meals_update', async () => {
       try {
         const params = new URLSearchParams(window.location.search);
