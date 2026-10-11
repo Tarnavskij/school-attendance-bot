@@ -50,14 +50,18 @@ def inject_csp_nonce():
 
 
 # ── SSE subscribers ───────────────────────────────────────────────────────────
-subscribers: list[queue.Queue] = []
+# Один активный подписчик на sse_token (браузерную сессию).
+# При новом подключении с тем же токеном предыдущее соединение
+# принудительно закрывается — иначе Firefox копит висящие SSE
+# и через 30 быстрых переходов по вкладкам выжирает все потоки waitress.
+subscribers: dict[str, queue.Queue] = {}
 subscribers_lock = threading.Lock()
 
 
 def _notify_subscribers(event: str, data: dict | None = None) -> None:
     payload = f"event: {event}\ndata: {json.dumps(data or {})}\n\n"
     with subscribers_lock:
-        for q in subscribers:
+        for q in subscribers.values():
             q.put(payload)
 
 
@@ -859,17 +863,27 @@ def stream():
     def event_stream():
         q: queue.Queue = queue.Queue()
         with subscribers_lock:
-            subscribers.append(q)
+            old = subscribers.get(token)
+            if old is not None:
+                # старая подписка того же клиента — принудительно закрываем
+                try:
+                    old.put_nowait(None)
+                except Exception:
+                    pass
+            subscribers[token] = q
         try:
             while True:
                 try:
                     msg = q.get(timeout=30)
+                    if msg is None:
+                        break  # закрыто извне
                     yield msg
                 except queue.Empty:
                     yield ": keepalive\n\n"
         finally:
             with subscribers_lock:
-                subscribers.remove(q)
+                if subscribers.get(token) is q:
+                    subscribers.pop(token, None)
 
     return Response(
         event_stream(),

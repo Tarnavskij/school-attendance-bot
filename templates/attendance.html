@@ -143,6 +143,7 @@
 
 <script nonce="{{ csp_nonce }}">
     const sse = new EventSource('/stream?token={{ sse_token }}');
+    window.addEventListener('pagehide', () => sse.close());
     sse.addEventListener('attendance_update', () => {
         loadData();
     });
