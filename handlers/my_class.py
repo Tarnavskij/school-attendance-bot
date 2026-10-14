@@ -14,8 +14,11 @@ from repositories import (
     get_default_school_id,
     get_class_session_today,
     update_session_records,
+    get_class_analytics,
 )
-from core.keyboards import BTN_MY_CLASS, build_menu_keyboard, back_to_menu_btn
+from core.keyboards import (
+    BTN_MY_CLASS, BTN_ANALYTICS, build_menu_keyboard, back_to_menu_btn,
+)
 from core.roles import check_access, is_admin, Role
 from core.constants import ABSENCE_REASONS
 from core.school_context import get_school_id_for_admin
@@ -221,6 +224,68 @@ async def _send_or_edit(message: Message, text: str, kb: InlineKeyboardMarkup, e
         await message.edit_text(text, reply_markup=kb)
     else:
         await message.answer(text, reply_markup=kb)
+
+
+# ── Аналитика для классного руководителя ──────────────────────────────────
+
+def _current_quarter(today: date) -> tuple[date, date, str]:
+    """
+    Границы текущей школьной четверти и её название.
+    Сентябрь–октябрь — 1-я, ноябрь–декабрь — 2-я,
+    январь–март — 3-я, апрель–май — 4-я.
+    Летом возвращаем последнюю завершённую (4-ю предыдущего учебного года).
+    """
+    y, m = today.year, today.month
+    if m in (9, 10):
+        return date(y, 9, 1), date(y, 10, 31), "1-я четверть"
+    if m in (11, 12):
+        return date(y, 11, 1), date(y, 12, 31), "2-я четверть"
+    if m in (1, 2, 3):
+        return date(y, 1, 1), date(y, 3, 31), "3-я четверть"
+    if m in (4, 5):
+        return date(y, 4, 1), date(y, 5, 31), "4-я четверть"
+    return date(y - 1, 4, 1), date(y - 1, 5, 31), "4-я четверть"
+
+
+@my_class_router.message(F.text == BTN_ANALYTICS)
+async def my_class_analytics(message: Message) -> None:
+    user_id = message.from_user.id
+    if not check_access(user_id, [Role.CLASS_TEACHER]):
+        await message.answer("У вас нет закреплённого класса.")
+        return
+
+    if is_admin(user_id):
+        await message.answer("Аналитика доступна только классным руководителям.")
+        return
+
+    teacher = get_teacher_by_telegram_id(user_id)
+    if not teacher or not teacher.class_id:
+        await message.answer("У вас не указан класс. Обратитесь к администратору.")
+        return
+
+    date_from, date_to, quarter_name = _current_quarter(date.today())
+    data = get_class_analytics(teacher.class_id, teacher.school_id, date_from, date_to)
+
+    if data["total_absences"] == 0:
+        await message.answer(
+            f"📊 Аналитика за {quarter_name}\n\n"
+            f"Пропусков нет."
+        )
+        return
+
+    lines = [f"📊 Аналитика за {quarter_name}", ""]
+    if data["top_student"]:
+        lines.append(
+            f"🏆 Больше всех пропустил: {data['top_student']['name']} "
+            f"({data['top_student']['count']})"
+        )
+    if data["top_reason"]:
+        lines.append(f"📌 Самая частая причина: {data['top_reason']['name']}")
+    lines.append("")
+    lines.append(f"Всего пропусков за четверть: {data['total_absences']}")
+
+    await message.answer("\n".join(lines))
+
 
 # ── Редактор переклички (для классного руководителя и админа) ──────────────
 

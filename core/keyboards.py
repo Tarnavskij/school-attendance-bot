@@ -9,6 +9,7 @@ BTN_MENU = "📋 Меню"
 BTN_START_ROLL = "🧑‍🏫 Начать перекличку"
 BTN_MY_CLASS = "👨‍🏫 Мой класс"
 BTN_MEAL = "🍽️ Питание"                      # для классных руководителей
+BTN_ANALYTICS = "📊 Аналитика"               # для классных руководителей
 BTN_CHEF_MEAL = "🍽️ Сводка питания"          # для шеф-повара
 BTN_SCHOOL_SUMMARY = "📊 Сводка по школе"
 BTN_TEACHER_LIST = "👥 Пользователи"
@@ -59,7 +60,7 @@ def build_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     elif role == Role.CLASS_TEACHER:
         rows = [
             [KeyboardButton(text=BTN_START_ROLL), KeyboardButton(text=BTN_MY_CLASS)],
-            [KeyboardButton(text=BTN_MEAL)],
+            [KeyboardButton(text=BTN_MEAL), KeyboardButton(text=BTN_ANALYTICS)],
         ]
     elif role == Role.SECRETARY:
         rows = [[KeyboardButton(text=BTN_ROLL_STATUS)]]

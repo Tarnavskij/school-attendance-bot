@@ -881,6 +881,61 @@ def get_meal_summary(school_id: int, target_date: date | None = None) -> str:
         return "\n".join(lines)
 
 
+# ===== Аналитика по классу =====
+
+def get_class_analytics(class_id: int, school_id: int,
+                        date_from: date, date_to: date) -> dict:
+    """
+    Простая аналитика за период по одному классу:
+      top_student  — кто больше всех пропустил (имя, сколько раз)
+      top_reason   — самая частая причина отсутствия (причина, сколько раз)
+      total_absences — всего пропусков за период
+
+    Учитываются только завершённые сессии этого класса.
+    """
+    from collections import Counter
+    from core.constants import DEFAULT_ABSENCE_REASON
+
+    with get_db() as db:
+        rows = (
+            db.query(AttendanceRecord, Student.name)
+            .join(AttendanceSession, AttendanceSession.id == AttendanceRecord.session_id)
+            .join(Student, Student.id == AttendanceRecord.student_id)
+            .filter(
+                AttendanceSession.class_id == class_id,
+                AttendanceSession.school_id == school_id,
+                AttendanceSession.status.in_(["completed", "auto_completed"]),
+                AttendanceSession.session_date >= date_from,
+                AttendanceSession.session_date <= date_to,
+                AttendanceRecord.is_present.is_(False),
+            )
+            .all()
+        )
+
+        if not rows:
+            return {
+                "top_student": None,
+                "top_reason": None,
+                "total_absences": 0,
+            }
+
+        by_student: Counter = Counter()
+        by_reason: Counter = Counter()
+        for rec, student_name in rows:
+            by_student[student_name] += 1
+            reason = rec.reason or DEFAULT_ABSENCE_REASON
+            by_reason[reason] += 1
+
+        top_student_name, top_student_count = by_student.most_common(1)[0]
+        top_reason, top_reason_count = by_reason.most_common(1)[0]
+
+        return {
+            "top_student": {"name": top_student_name, "count": top_student_count},
+            "top_reason": {"name": top_reason, "count": top_reason_count},
+            "total_absences": len(rows),
+        }
+
+
 def get_class_meal_summary(class_id: int, school_id: int,
                            target_date: date | None = None) -> str:
     if target_date is None:
