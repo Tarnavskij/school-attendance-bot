@@ -4,6 +4,7 @@ from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
+from helpers.ui import reset_screen, set_screen
 
 from core.keyboards import BTN_MEAL, back_to_menu_btn
 from core.roles import check_access, Role, is_admin
@@ -95,8 +96,11 @@ async def render_meal_keyboard(target: Message | CallbackQuery, state: FSMContex
 # ── Хендлеры ──────────────────────────────────────────────────────────────────
 @meals_router.message(F.text == BTN_MEAL)
 async def meal_menu(message: Message, state: FSMContext):
+    await reset_screen(message.bot, message.chat.id, state)
+
     user_id = message.from_user.id
     if not check_access(user_id, [Role.CLASS_TEACHER]):
+        await message.answer("У вас нет доступа к этому разделу.")
         return
 
     if is_admin(user_id):
@@ -139,7 +143,8 @@ async def meal_menu(message: Message, state: FSMContext):
         [InlineKeyboardButton(text=button_text, callback_data=callback_data)],
         [back_to_menu_btn()],
     ])
-    await message.answer(text, reply_markup=kb)
+    sent = await message.answer(text, reply_markup=kb)
+    await set_screen(state, sent.message_id)
 
 
 @meals_router.callback_query(F.data.in_({"meal:start_new", "meal:start_edit"}))
@@ -166,7 +171,7 @@ async def meal_start_editing(callback: CallbackQuery, state: FSMContext):
         is_admin_mode=False
     )
     await state.set_state(MealStates.editing)
-    await render_meal_keyboard(callback.message, state, edit=False)
+    await render_meal_keyboard(callback, state, edit=True)
     await callback.answer()
 
 

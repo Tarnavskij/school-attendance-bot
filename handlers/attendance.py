@@ -18,10 +18,13 @@ from repositories import (
     get_default_school_id,
     update_session_records,
 )
-from core.keyboards import BTN_START_ROLL, build_menu_keyboard
+from aiogram.exceptions import TelegramBadRequest
+
+from core.keyboards import BTN_START_ROLL, build_menu_keyboard, ALL_MENU_BUTTONS
 from core.roles import check_access, Role, is_admin
 from core.school_context import get_school_id_for_admin
 from helpers.session_card import get_today_session_card_data
+from helpers.ui import reset_screen, set_screen
 
 attendance_router = Router()
 
@@ -34,6 +37,9 @@ class AttendanceStates(StatesGroup):
 
 @attendance_router.message(F.text == BTN_START_ROLL)
 async def start_attendance(message: Message, state: FSMContext) -> None:
+    # Убираем старое рабочее сообщение и сбрасываем возможный чужой state
+    await reset_screen(message.bot, message.chat.id, state)
+
     if not check_access(message.from_user.id, [Role.SUBJECT_TEACHER, Role.CLASS_TEACHER]):
         await message.answer("У вас нет прав для проведения переклички.")
         return
@@ -56,10 +62,10 @@ async def start_attendance(message: Message, state: FSMContext) -> None:
                     )],
                     [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="nav:menu")],
                 ])
-            await message.answer(card_data["text"], reply_markup=kb)
+            sent = await message.answer(card_data["text"], reply_markup=kb)
+            await set_screen(state, sent.message_id)
             return
 
-    # Определяем школу
     if is_admin(message.from_user.id):
         school_id = get_school_id_for_admin(message.from_user.id)
     else:
@@ -72,7 +78,7 @@ async def start_attendance(message: Message, state: FSMContext) -> None:
 
     kb = _build_class_keyboard(available)
     sent = await message.answer("🏫 Выберите класс для переклички:", reply_markup=kb)
-    await state.update_data(flow_msg_id=sent.message_id, chat_id=sent.chat.id)
+    await set_screen(state, sent.message_id)
     await state.set_state(AttendanceStates.choosing_class)
 
 
@@ -96,16 +102,15 @@ def _build_class_keyboard(available_classes) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-@attendance_router.message(AttendanceStates.choosing_class)
+@attendance_router.message(AttendanceStates.choosing_class, ~F.text.in_(ALL_MENU_BUTTONS))
 async def text_during_class_choice(message: Message) -> None:
     await message.delete()
 
 
 @attendance_router.callback_query(AttendanceStates.choosing_class, F.data == "att:cancel_flow")
 async def cancel_flow(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.message.edit_text("Перекличка отменена.")
-    await callback.message.answer(
-        "Выберите действие:",
+    await callback.message.edit_text(
+        "Перекличка отменена.",
         reply_markup=build_menu_keyboard(callback.from_user.id),
     )
     await state.clear()
@@ -139,9 +144,8 @@ async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
     )
 
     if session is None:
-        await callback.message.edit_text(result)
-        await callback.message.answer(
-            "Выберите действие:",
+        await callback.message.edit_text(
+            result,
             reply_markup=build_menu_keyboard(callback.from_user.id),
         )
         await state.clear()
@@ -160,7 +164,7 @@ async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
-@attendance_router.message(AttendanceStates.marking)
+@attendance_router.message(AttendanceStates.marking, ~F.text.in_(ALL_MENU_BUTTONS))
 async def text_during_marking(message: Message) -> None:
     await message.delete()
 
@@ -197,9 +201,8 @@ async def cancel_marking(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     delete_session(session_id)
-    await callback.message.edit_text("Перекличка отменена.")
-    await callback.message.answer(
-        "Выберите действие:",
+    await callback.message.edit_text(
+        "Перекличка отменена.",
         reply_markup=build_menu_keyboard(callback.from_user.id),
     )
     await state.clear()
@@ -259,11 +262,22 @@ async def submit_attendance(callback: CallbackQuery, state: FSMContext) -> None:
     if notify:
         await notify("summary_update")
 
-    await callback.message.edit_text(card_text, reply_markup=None)
-    await callback.message.answer(
-        "Выберите действие:",
+    # Удаляем рабочее сообщение (то самое, на котором шла отметка)
+    screen_id = data_check.get("screen_msg_id")
+    chat_id = callback.message.chat.id
+    if screen_id:
+        try:
+            await callback.bot.delete_message(chat_id, screen_id)
+        except TelegramBadRequest:
+            pass
+
+    # Отправляем финальную карточку отдельным сообщением
+    await callback.bot.send_message(
+        chat_id,
+        card_text,
         reply_markup=build_menu_keyboard(callback.from_user.id),
     )
+
     await state.clear()
     await callback.answer("Готово!")
 
@@ -338,6 +352,7 @@ async def edit_own_start(callback: CallbackQuery, state: FSMContext) -> None:
         original_state=original_state,
     )
     await state.set_state(AttendanceStates.editing_own)
+    await set_screen(state, callback.message.message_id)
 
     await _render_edit_own_keyboard(callback, state)
     await callback.answer()
