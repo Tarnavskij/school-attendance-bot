@@ -15,6 +15,7 @@ from repositories import (
     get_class_session_today,
     update_session_records,
     get_class_analytics,
+    get_class_quarters_with_data,
 )
 from core.keyboards import (
     BTN_MY_CLASS, BTN_ANALYTICS, build_menu_keyboard, back_to_menu_btn,
@@ -228,23 +229,113 @@ async def _send_or_edit(message: Message, text: str, kb: InlineKeyboardMarkup, e
 
 # ── Аналитика для классного руководителя ──────────────────────────────────
 
-def _current_quarter(today: date) -> tuple[date, date, str]:
+def _quarters_for_today(today: date) -> list[dict]:
     """
-    Границы текущей школьной четверти и её название.
-    Сентябрь–октябрь — 1-я, ноябрь–декабрь — 2-я,
-    январь–март — 3-я, апрель–май — 4-я.
-    Летом возвращаем последнюю завершённую (4-ю предыдущего учебного года).
+    Все начавшиеся четверти текущего учебного года, новые сверху.
+    В сентябре добавляется 4-я четверть прошлого учебного года.
     """
     y, m = today.year, today.month
-    if m in (9, 10):
-        return date(y, 9, 1), date(y, 10, 31), "1-я четверть"
-    if m in (11, 12):
-        return date(y, 11, 1), date(y, 12, 31), "2-я четверть"
-    if m in (1, 2, 3):
-        return date(y, 1, 1), date(y, 3, 31), "3-я четверть"
-    if m in (4, 5):
-        return date(y, 4, 1), date(y, 5, 31), "4-я четверть"
-    return date(y - 1, 4, 1), date(y - 1, 5, 31), "4-я четверть"
+    start_year = y if m >= 9 else y - 1
+
+    q_defs = [
+        ("1-я четверть", date(start_year, 9, 1), date(start_year, 10, 31)),
+        ("2-я четверть", date(start_year, 11, 1), date(start_year, 12, 31)),
+        ("3-я четверть", date(start_year + 1, 1, 1), date(start_year + 1, 3, 31)),
+        ("4-я четверть", date(start_year + 1, 4, 1), date(start_year + 1, 5, 31)),
+    ]
+
+    result = []
+    for label, d_from, d_to in q_defs:
+        if d_from <= today:
+            result.append({
+                "label": f"{label} {start_year}-{start_year + 1}",
+                "short_label": label,
+                "date_from": d_from,
+                "date_to": d_to,
+            })
+
+    if m == 9:
+        prev = start_year - 1
+        result.insert(0, {
+            "label": f"4-я четверть {prev}-{prev + 1}",
+            "short_label": "4-я четверть",
+            "date_from": date(prev + 1, 4, 1),
+            "date_to": date(prev + 1, 5, 31),
+        })
+
+    return list(reversed(result))
+
+
+def _find_quarter(date_from: date, date_to: date) -> dict | None:
+    for q in _quarters_for_today(date.today()):
+        if q["date_from"] == date_from and q["date_to"] == date_to:
+            return q
+    return None
+
+
+async def _show_analytics_summary(target, class_id: int, school_id: int,
+                                  quarter: dict, edit: bool = False) -> None:
+    data = get_class_analytics(class_id, school_id, quarter["date_from"], quarter["date_to"])
+    label = quarter["label"]
+
+    if data["total_absences"] == 0:
+        text = f"📊 {label}\n\nПропусков нет."
+        kb = InlineKeyboardMarkup(inline_keyboard=[[back_to_menu_btn()]])
+        await _send_or_edit(target, text, kb, edit)
+        return
+
+    lines = [f"📊 {label}", f"Всего пропусков: {data['total_absences']}", ""]
+
+    lines.append("🏆 Топ по пропускам:")
+    for i, s in enumerate(data["top_students"], 1):
+        lines.append(f"{i}. {s['name']} — {s['total']}")
+
+    lines.append("")
+    lines.append("📌 Причины:")
+    total = data["total_absences"]
+    for reason, cnt in sorted(data["by_reason"].items(), key=lambda x: -x[1]):
+        pct = round(cnt / total * 100)
+        lines.append(f"{reason} — {cnt} ({pct}%)")
+
+    cb_suffix = f"{quarter['date_from'].isoformat()}:{quarter['date_to'].isoformat()}"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📋 Все ученики", callback_data=f"an:s:{cb_suffix}")],
+        [back_to_menu_btn()],
+    ])
+    await _send_or_edit(target, "\n".join(lines), kb, edit)
+
+
+async def _show_analytics_students(target, class_id: int, school_id: int,
+                                   quarter: dict) -> None:
+    data = get_class_analytics(class_id, school_id, quarter["date_from"], quarter["date_to"])
+    label = quarter["label"]
+
+    with_abs = [s for s in data["students"] if s["total"] > 0]
+    without_abs = [s for s in data["students"] if s["total"] == 0]
+
+    lines = [f"📋 Все ученики — {label}", ""]
+
+    if with_abs:
+        for s in with_abs:
+            parts = []
+            for reason, cnt in sorted(s["by_reason"].items(), key=lambda x: -x[1]):
+                icon = reason.split(" ")[0]
+                parts.append(f"{icon}{cnt}")
+            lines.append(f"• {s['name']} — {s['total']} ({', '.join(parts)})")
+    else:
+        lines.append("Пропусков нет ни у кого.")
+
+    if without_abs:
+        lines.append("")
+        names = ", ".join(s["name"] for s in without_abs)
+        lines.append(f"✅ Без пропусков ({len(without_abs)}): {names}")
+
+    cb_suffix = f"{quarter['date_from'].isoformat()}:{quarter['date_to'].isoformat()}"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="↩️ К сводке", callback_data=f"an:q:{cb_suffix}")],
+        [back_to_menu_btn()],
+    ])
+    await target.answer("\n".join(lines), reply_markup=kb)
 
 
 @my_class_router.message(F.text == BTN_ANALYTICS)
@@ -263,28 +354,99 @@ async def my_class_analytics(message: Message) -> None:
         await message.answer("У вас не указан класс. Обратитесь к администратору.")
         return
 
-    date_from, date_to, quarter_name = _current_quarter(date.today())
-    data = get_class_analytics(teacher.class_id, teacher.school_id, date_from, date_to)
+    quarters = _quarters_for_today(date.today())
+    quarters = get_class_quarters_with_data(teacher.class_id, teacher.school_id, quarters)
 
-    if data["total_absences"] == 0:
+    with_data = [q for q in quarters if q["total_absences"] > 0]
+    if not with_data:
         await message.answer(
-            f"📊 Аналитика за {quarter_name}\n\n"
-            f"Пропусков нет."
+            "📊 Аналитика\n\nПока нет данных о перекличках за текущий учебный год."
         )
         return
 
-    lines = [f"📊 Аналитика за {quarter_name}", ""]
-    if data["top_student"]:
-        lines.append(
-            f"🏆 Больше всех пропустил: {data['top_student']['name']} "
-            f"({data['top_student']['count']})"
-        )
-    if data["top_reason"]:
-        lines.append(f"📌 Самая частая причина: {data['top_reason']['name']}")
-    lines.append("")
-    lines.append(f"Всего пропусков за четверть: {data['total_absences']}")
+    if len(with_data) == 1:
+        await _show_analytics_summary(message, teacher.class_id, teacher.school_id, with_data[0])
+        return
 
-    await message.answer("\n".join(lines))
+    buttons = []
+    for q in quarters:
+        if q["total_absences"] > 0:
+            text = f"{q['short_label']} ({q['total_absences']})"
+        else:
+            text = f"{q['short_label']} — нет данных"
+        buttons.append([InlineKeyboardButton(
+            text=text,
+            callback_data=f"an:q:{q['date_from'].isoformat()}:{q['date_to'].isoformat()}",
+        )])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons + [[back_to_menu_btn()]])
+    await message.answer("📊 Выберите четверть:", reply_markup=kb)
+
+
+@my_class_router.callback_query(F.data.startswith("an:q:"))
+async def analytics_quarter(callback: CallbackQuery) -> None:
+    user_id = callback.from_user.id
+    if not check_access(user_id, [Role.CLASS_TEACHER]):
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    if is_admin(user_id):
+        await callback.answer("Только для классных руководителей.", show_alert=True)
+        return
+
+    teacher = get_teacher_by_telegram_id(user_id)
+    if not teacher or not teacher.class_id:
+        await callback.answer("У вас нет класса.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+    try:
+        d_from = date.fromisoformat(parts[2])
+        d_to = date.fromisoformat(parts[3])
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка данных.", show_alert=True)
+        return
+
+    quarter = _find_quarter(d_from, d_to)
+    if not quarter:
+        await callback.answer("Четверть не найдена.", show_alert=True)
+        return
+
+    await _show_analytics_summary(
+        callback.message, teacher.class_id, teacher.school_id, quarter, edit=True,
+    )
+    await callback.answer()
+
+
+@my_class_router.callback_query(F.data.startswith("an:s:"))
+async def analytics_students(callback: CallbackQuery) -> None:
+    user_id = callback.from_user.id
+    if not check_access(user_id, [Role.CLASS_TEACHER]):
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    if is_admin(user_id):
+        await callback.answer("Только для классных руководителей.", show_alert=True)
+        return
+
+    teacher = get_teacher_by_telegram_id(user_id)
+    if not teacher or not teacher.class_id:
+        await callback.answer("У вас нет класса.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+    try:
+        d_from = date.fromisoformat(parts[2])
+        d_to = date.fromisoformat(parts[3])
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка данных.", show_alert=True)
+        return
+
+    quarter = _find_quarter(d_from, d_to)
+    if not quarter:
+        await callback.answer("Четверть не найдена.", show_alert=True)
+        return
+
+    await _show_analytics_students(callback.message, teacher.class_id, teacher.school_id, quarter)
+    await callback.answer()
 
 
 # ── Редактор переклички (для классного руководителя и админа) ──────────────

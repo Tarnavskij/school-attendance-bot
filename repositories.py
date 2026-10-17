@@ -886,21 +886,33 @@ def get_meal_summary(school_id: int, target_date: date | None = None) -> str:
 def get_class_analytics(class_id: int, school_id: int,
                         date_from: date, date_to: date) -> dict:
     """
-    Простая аналитика за период по одному классу:
-      top_student  — кто больше всех пропустил (имя, сколько раз)
-      top_reason   — самая частая причина отсутствия (причина, сколько раз)
-      total_absences — всего пропусков за период
+    Аналитика по классу за период.
 
-    Учитываются только завершённые сессии этого класса.
+    Возвращает:
+      students       — [{id, name, total, by_reason: {reason: count}}, ...] по алфавиту
+      by_reason      — {reason: count} — сводка по причинам
+      top_students   — до 5 учеников с пропусками, отсортированных по убыванию
+      top_student    — {name, count} или None
+      top_reason     — {name, count} или None
+      total_absences — общее количество пропусков
     """
-    from collections import Counter
+    from collections import Counter, defaultdict
     from core.constants import DEFAULT_ABSENCE_REASON
 
     with get_db() as db:
+        students_all = (
+            db.query(Student.id, Student.name)
+            .filter(
+                Student.class_id == class_id,
+                Student.school_id == school_id,
+            )
+            .order_by(Student.name)
+            .all()
+        )
+
         rows = (
-            db.query(AttendanceRecord, Student.name)
+            db.query(AttendanceRecord.student_id, AttendanceRecord.reason)
             .join(AttendanceSession, AttendanceSession.id == AttendanceRecord.session_id)
-            .join(Student, Student.id == AttendanceRecord.student_id)
             .filter(
                 AttendanceSession.class_id == class_id,
                 AttendanceSession.school_id == school_id,
@@ -912,28 +924,73 @@ def get_class_analytics(class_id: int, school_id: int,
             .all()
         )
 
-        if not rows:
-            return {
-                "top_student": None,
-                "top_reason": None,
-                "total_absences": 0,
-            }
+        by_student: dict[int, Counter] = defaultdict(Counter)
+        by_reason_total: Counter = Counter()
 
-        by_student: Counter = Counter()
-        by_reason: Counter = Counter()
-        for rec, student_name in rows:
-            by_student[student_name] += 1
-            reason = rec.reason or DEFAULT_ABSENCE_REASON
-            by_reason[reason] += 1
+        for student_id, reason in rows:
+            r = reason or DEFAULT_ABSENCE_REASON
+            by_student[student_id][r] += 1
+            by_reason_total[r] += 1
 
-        top_student_name, top_student_count = by_student.most_common(1)[0]
-        top_reason, top_reason_count = by_reason.most_common(1)[0]
+        students = []
+        for s_id, s_name in students_all:
+            reasons = dict(by_student.get(s_id, {}))
+            total = sum(reasons.values())
+            students.append({
+                "id": s_id,
+                "name": s_name,
+                "total": total,
+                "by_reason": reasons,
+            })
+
+        with_absences = [s for s in students if s["total"] > 0]
+        top_students = sorted(with_absences, key=lambda x: -x["total"])[:5]
+
+        top_student = None
+        if top_students:
+            top_student = {"name": top_students[0]["name"], "count": top_students[0]["total"]}
+
+        top_reason = None
+        if by_reason_total:
+            name, count = by_reason_total.most_common(1)[0]
+            top_reason = {"name": name, "count": count}
 
         return {
-            "top_student": {"name": top_student_name, "count": top_student_count},
-            "top_reason": {"name": top_reason, "count": top_reason_count},
+            "students": students,
+            "by_reason": dict(by_reason_total),
+            "top_students": top_students,
+            "top_student": top_student,
+            "top_reason": top_reason,
             "total_absences": len(rows),
         }
+
+
+def get_class_quarters_with_data(class_id: int, school_id: int,
+                                 quarters: list[dict]) -> list[dict]:
+    """
+    Из переданного списка четвертей оставляет только те, где есть данные.
+    К каждой добавляет total_absences.
+    """
+    if not quarters:
+        return []
+    with get_db() as db:
+        result = []
+        for q in quarters:
+            count = (
+                db.query(AttendanceRecord.id)
+                .join(AttendanceSession, AttendanceSession.id == AttendanceRecord.session_id)
+                .filter(
+                    AttendanceSession.class_id == class_id,
+                    AttendanceSession.school_id == school_id,
+                    AttendanceSession.status.in_(["completed", "auto_completed"]),
+                    AttendanceSession.session_date >= q["date_from"],
+                    AttendanceSession.session_date <= q["date_to"],
+                    AttendanceRecord.is_present.is_(False),
+                )
+                .count()
+            )
+            result.append({**q, "total_absences": count})
+        return result
 
 
 def get_class_meal_summary(class_id: int, school_id: int,
