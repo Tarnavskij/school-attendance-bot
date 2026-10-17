@@ -4,6 +4,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from datetime import date
+from helpers.ui import reset_screen, set_screen
 
 from repositories import (
     get_teacher_by_telegram_id,
@@ -32,7 +33,9 @@ class MyClassStates(StatesGroup):
 
 
 @my_class_router.message(F.text == BTN_MY_CLASS)
-async def my_class_handler(message: Message) -> None:
+async def my_class_handler(message: Message, state: FSMContext) -> None:
+    await reset_screen(message.bot, message.chat.id, state)
+
     user_id = message.from_user.id
     if not check_access(user_id, [Role.CLASS_TEACHER]):
         await message.answer("У вас нет закреплённого класса.")
@@ -45,7 +48,8 @@ async def my_class_handler(message: Message) -> None:
             await message.answer("Нет доступных классов.")
             return
         kb = _build_class_grid_keyboard(classes, callback_prefix="mc:view")
-        await message.answer("Выберите класс для просмотра:", reply_markup=kb)
+        sent = await message.answer("Выберите класс для просмотра:", reply_markup=kb)
+        await set_screen(state, sent.message_id)
         return
 
     teacher = get_teacher_by_telegram_id(user_id)
@@ -53,7 +57,9 @@ async def my_class_handler(message: Message) -> None:
         await message.answer("У вас не указан класс. Обратитесь к администратору.")
         return
 
-    await _show_absent_list(message, teacher.class_id, teacher.school_id, edit=False)
+    sent = await _show_absent_list(message, teacher.class_id, teacher.school_id, edit=False)
+    if sent:
+        await set_screen(state, sent.message_id)
 
 
 @my_class_router.callback_query(F.data.startswith("mc:view:"))
@@ -139,7 +145,7 @@ def _get_school_id(user_id: int) -> int:
     if is_admin(user_id):
         return get_school_id_for_admin(user_id)
     teacher = get_teacher_by_telegram_id(user_id)
-    return teacher.school_id if teacher else get_default_school_id()  # <-- заменили DEFAULT_SCHOOL_ID
+    return teacher.school_id if teacher else get_default_school_id()
 
 
 def _build_class_grid_keyboard(classes, callback_prefix: str) -> InlineKeyboardMarkup:
@@ -155,7 +161,7 @@ def _build_class_grid_keyboard(classes, callback_prefix: str) -> InlineKeyboardM
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def _show_absent_list(message: Message, class_id: int, school_id: int, edit: bool = False) -> None:
+async def _show_absent_list(message: Message, class_id: int, school_id: int, edit: bool = False):
     today = date.today()
     session = get_class_session_today(class_id, today, school_id)
     absent = get_absent_students_today(class_id, today, school_id=school_id)
@@ -164,21 +170,16 @@ async def _show_absent_list(message: Message, class_id: int, school_id: int, edi
     class_obj = next((c for c in classes if c.id == class_id), None)
     class_name = class_obj.name if class_obj else "?"
 
-    # Случай 1: перекличка сегодня не проводилась
     if session is None:
         text = f"📋 В классе {class_name} сегодня перекличка не проводилась."
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_to_menu_btn()]])
-        await _send_or_edit(message, text, kb, edit)
-        return
+        return await _send_or_edit(message, text, kb, edit)
 
-    # Случай 2: перекличка ещё идёт
     if session["status"] == "active":
         text = f"⏳ В классе {class_name} перекличка ещё идёт. Дождитесь завершения."
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_to_menu_btn()]])
-        await _send_or_edit(message, text, kb, edit)
-        return
+        return await _send_or_edit(message, text, kb, edit)
 
-    # Случай 3: перекличка закрыта автоматически (в 20:00) — только просмотр
     if session["status"] == "auto_completed":
         lines = [f"🔒 Перекличка в классе {class_name} закрыта автоматически."]
         if absent:
@@ -190,10 +191,8 @@ async def _show_absent_list(message: Message, class_id: int, school_id: int, edi
             lines.append("✅ Все присутствовали.")
         text = "\n".join(lines)
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_to_menu_btn()]])
-        await _send_or_edit(message, text, kb, edit)
-        return
+        return await _send_or_edit(message, text, kb, edit)
 
-    # Случай 4: перекличка завершена (status == "completed") — можно редактировать
     edit_btn = InlineKeyboardButton(
         text="✏️ Редактировать",
         callback_data=f"mc:edit:{class_id}",
@@ -216,24 +215,19 @@ async def _show_absent_list(message: Message, class_id: int, school_id: int, edi
         kb = InlineKeyboardMarkup(inline_keyboard=rows)
         text = f"📋 Отсутствующие в классе {class_name} (нажмите для указания причины):"
 
-    await _send_or_edit(message, text, kb, edit)
+    return await _send_or_edit(message, text, kb, edit)
 
 
-async def _send_or_edit(message: Message, text: str, kb: InlineKeyboardMarkup, edit: bool) -> None:
-    """Отправляет новое сообщение или редактирует текущее — убирает 4 копипаста."""
+async def _send_or_edit(message, text, kb, edit):
     if edit:
         await message.edit_text(text, reply_markup=kb)
-    else:
-        await message.answer(text, reply_markup=kb)
+        return message
+    return await message.answer(text, reply_markup=kb)
 
 
 # ── Аналитика для классного руководителя ──────────────────────────────────
 
 def _quarters_for_today(today: date) -> list[dict]:
-    """
-    Все начавшиеся четверти текущего учебного года, новые сверху.
-    В сентябре добавляется 4-я четверть прошлого учебного года.
-    """
     y, m = today.year, today.month
     start_year = y if m >= 9 else y - 1
 
@@ -274,15 +268,14 @@ def _find_quarter(date_from: date, date_to: date) -> dict | None:
 
 
 async def _show_analytics_summary(target, class_id: int, school_id: int,
-                                  quarter: dict, edit: bool = False) -> None:
+                                  quarter: dict, edit: bool = False):
     data = get_class_analytics(class_id, school_id, quarter["date_from"], quarter["date_to"])
     label = quarter["label"]
 
     if data["total_absences"] == 0:
         text = f"📊 {label}\n\nПропусков нет."
         kb = InlineKeyboardMarkup(inline_keyboard=[[back_to_menu_btn()]])
-        await _send_or_edit(target, text, kb, edit)
-        return
+        return await _send_or_edit(target, text, kb, edit)
 
     lines = [f"📊 {label}", f"Всего пропусков: {data['total_absences']}", ""]
 
@@ -302,11 +295,11 @@ async def _show_analytics_summary(target, class_id: int, school_id: int,
         [InlineKeyboardButton(text="📋 Все ученики", callback_data=f"an:s:{cb_suffix}")],
         [back_to_menu_btn()],
     ])
-    await _send_or_edit(target, "\n".join(lines), kb, edit)
+    return await _send_or_edit(target, "\n".join(lines), kb, edit)
 
 
 async def _show_analytics_students(target, class_id: int, school_id: int,
-                                   quarter: dict) -> None:
+                                   quarter: dict, edit: bool = False):
     data = get_class_analytics(class_id, school_id, quarter["date_from"], quarter["date_to"])
     label = quarter["label"]
 
@@ -335,11 +328,13 @@ async def _show_analytics_students(target, class_id: int, school_id: int,
         [InlineKeyboardButton(text="↩️ К сводке", callback_data=f"an:q:{cb_suffix}")],
         [back_to_menu_btn()],
     ])
-    await target.answer("\n".join(lines), reply_markup=kb)
+    return await _send_or_edit(target, "\n".join(lines), kb, edit)
 
 
 @my_class_router.message(F.text == BTN_ANALYTICS)
-async def my_class_analytics(message: Message) -> None:
+async def my_class_analytics(message: Message, state: FSMContext) -> None:
+    await reset_screen(message.bot, message.chat.id, state)
+
     user_id = message.from_user.id
     if not check_access(user_id, [Role.CLASS_TEACHER]):
         await message.answer("У вас нет закреплённого класса.")
@@ -359,13 +354,18 @@ async def my_class_analytics(message: Message) -> None:
 
     with_data = [q for q in quarters if q["total_absences"] > 0]
     if not with_data:
-        await message.answer(
+        sent = await message.answer(
             "📊 Аналитика\n\nПока нет данных о перекличках за текущий учебный год."
         )
+        await set_screen(state, sent.message_id)
         return
 
     if len(with_data) == 1:
-        await _show_analytics_summary(message, teacher.class_id, teacher.school_id, with_data[0])
+        sent = await _show_analytics_summary(
+            message, teacher.class_id, teacher.school_id, with_data[0],
+        )
+        if sent:
+            await set_screen(state, sent.message_id)
         return
 
     buttons = []
@@ -380,7 +380,8 @@ async def my_class_analytics(message: Message) -> None:
         )])
 
     kb = InlineKeyboardMarkup(inline_keyboard=buttons + [[back_to_menu_btn()]])
-    await message.answer("📊 Выберите четверть:", reply_markup=kb)
+    sent = await message.answer("📊 Выберите четверть:", reply_markup=kb)
+    await set_screen(state, sent.message_id)
 
 
 @my_class_router.callback_query(F.data.startswith("an:q:"))
@@ -445,7 +446,9 @@ async def analytics_students(callback: CallbackQuery) -> None:
         await callback.answer("Четверть не найдена.", show_alert=True)
         return
 
-    await _show_analytics_students(callback.message, teacher.class_id, teacher.school_id, quarter)
+    await _show_analytics_students(
+        callback.message, teacher.class_id, teacher.school_id, quarter, edit=True,
+    )
     await callback.answer()
 
 
@@ -488,7 +491,6 @@ async def mc_edit_start(callback: CallbackQuery, state: FSMContext) -> None:
                 "reason": rec["reason"],
             }
         else:
-            # Ученик добавлен после переклички — по умолчанию присутствует
             items[s.id] = {"name": s.name, "is_present": True, "reason": None}
 
     await state.update_data(
@@ -534,7 +536,6 @@ async def mc_save(callback: CallbackQuery, state: FSMContext) -> None:
         if item["is_present"]:
             updates.append((student_id, True, None))
         else:
-            # Сохраняем прежнюю причину (если была)
             updates.append((student_id, False, item.get("reason")))
 
     update_session_records(session_id, updates)
@@ -562,7 +563,6 @@ async def mc_cancel_edit(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 async def _render_edit_keyboard(callback: CallbackQuery, state: FSMContext) -> None:
-    """Рисует экран редактирования переклички (toggle-список учеников)."""
     data = await state.get_data()
     items = data.get("items", {})
     class_name = data.get("class_name", "?")

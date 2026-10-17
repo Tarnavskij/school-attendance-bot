@@ -21,8 +21,18 @@ BTN_SCHOOLS = "🏫 Школы"
 BTN_ADMIN_MEAL = "🍽️ Управление питанием"    # для администратора
 BTN_ATTENDANCE_GRAPH = "📅 График"            # для директора и админа
 
-# ── Reply keyboards ───────────────────────────────────────────────────────────
+# Все reply-кнопки, которые пользователь может нажать в любой момент.
+# Нужны, чтобы state-хендлеры (например, «напишите, а не нажимайте кнопки»)
+# НЕ съедали их и пропускали дальше по цепочке роутеров.
+ALL_MENU_BUTTONS = [
+    BTN_MENU, BTN_START_ROLL, BTN_MY_CLASS, BTN_MEAL, BTN_ANALYTICS,
+    BTN_CHEF_MEAL, BTN_SCHOOL_SUMMARY, BTN_TEACHER_LIST, BTN_STUDENTS,
+    BTN_REQUEST_ACCESS, BTN_DIRECTOR_CLASSES, BTN_ROLL_STATUS, BTN_SCHOOLS,
+    BTN_ADMIN_MEAL, BTN_ATTENDANCE_GRAPH,
+]
 
+
+# ── Reply keyboards ───────────────────────────────────────────────────────────
 start_kb = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text=BTN_MENU)]],
     resize_keyboard=True,
