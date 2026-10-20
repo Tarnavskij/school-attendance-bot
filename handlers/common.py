@@ -22,7 +22,7 @@ async def show_menu_for_user(target, user_id: int, edit: bool = False) -> None:
         kb = build_menu_keyboard(user_id)
         text = "Выберите действие:"
         if edit:
-            await target.edit_text(text, reply_markup=kb)
+            await target.edit_text(text, reply_markup=None)
         else:
             await target.answer(text, reply_markup=kb)
         return
@@ -38,7 +38,7 @@ async def show_menu_for_user(target, user_id: int, edit: bool = False) -> None:
     kb = build_menu_keyboard(user_id)
     text = "Выберите действие:"
     if edit:
-        await target.edit_text(text, reply_markup=kb)
+        await target.edit_text(text, reply_markup=None)
     else:
         await target.answer(text, reply_markup=kb)
 
@@ -60,10 +60,7 @@ async def show_menu(message: Message, state: FSMContext) -> None:
 async def nav_to_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     try:
-        await callback.message.edit_text(
-            "Выберите действие:",
-            reply_markup=build_menu_keyboard(callback.from_user.id),
-        )
+        await callback.message.edit_text("Выберите действие:", reply_markup=None)
     except TelegramBadRequest:
         try:
             await callback.message.delete()
