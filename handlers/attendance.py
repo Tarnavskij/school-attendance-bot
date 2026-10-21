@@ -111,7 +111,7 @@ async def text_during_class_choice(message: Message) -> None:
 async def cancel_flow(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.edit_text(
         "Перекличка отменена.",
-        reply_markup=build_menu_keyboard(callback.from_user.id),
+        reply_markup=None,
     )
     await state.clear()
     await callback.answer()
@@ -146,7 +146,7 @@ async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
     if session is None:
         await callback.message.edit_text(
             result,
-            reply_markup=build_menu_keyboard(callback.from_user.id),
+            reply_markup=None,
         )
         await state.clear()
         await callback.answer()
@@ -203,7 +203,7 @@ async def cancel_marking(callback: CallbackQuery, state: FSMContext) -> None:
     delete_session(session_id)
     await callback.message.edit_text(
         "Перекличка отменена.",
-        reply_markup=build_menu_keyboard(callback.from_user.id),
+        reply_markup=None,
     )
     await state.clear()
     await callback.answer()
