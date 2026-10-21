@@ -3,6 +3,11 @@ from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from datetime import date
 
+from aiogram.types import BufferedInputFile
+from core.keyboards import BTN_EXPORT_ABSENCES
+from repositories import get_absences_export_data
+from helpers.excel_export import generate_absences_excel
+
 from services import ReportService
 from repositories import get_all_classes, get_absent_students_today, get_default_school_id
 from core.keyboards import (
@@ -162,3 +167,19 @@ async def attendance_graph(message: Message) -> None:
                 await message.answer("\n".join(lines))
     except Exception as e:
         await message.answer(f"⚠️ Ошибка при получении данных: {e}")
+
+
+@director_router.message(F.text == BTN_EXPORT_ABSENCES)
+async def export_absences_director(message: Message):
+    if not check_access(message.from_user.id, [Role.DIRECTOR]):
+        await message.answer("Нет доступа.")
+        return
+
+    data = get_absences_export_data(1)  # Пока хардкод 1, при переходе на single-tenant уберем
+    if not data:
+        await message.answer("Нет данных для отчета.")
+        return
+
+    file_bytes = generate_absences_excel(data)
+    document = BufferedInputFile(file_bytes, filename=f"absences_report.xlsx")
+    await message.answer_document(document, caption="📥 Отчет по пропускам")
