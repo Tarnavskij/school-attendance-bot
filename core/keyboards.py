@@ -11,7 +11,9 @@ BTN_MY_CLASS = "👨‍🏫 Мой класс"
 BTN_MEAL = "🍽️ Питание"                      # для классных руководителей
 BTN_ANALYTICS = "📊 Аналитика"               # для классных руководителей
 BTN_CHEF_MEAL = "🍽️ Сводка питания"          # для шеф-повара
+BTN_CHEF_FREE = "🆓 Бесплатники"             # для шеф-повара
 BTN_SCHOOL_SUMMARY = "📊 Сводка по школе"
+BTN_EXPORT_ABSENCES = "📥 Экспорт пропусков" # для директора и секретаря
 BTN_TEACHER_LIST = "👥 Пользователи"
 BTN_STUDENTS = "🎓 Ученики"
 BTN_REQUEST_ACCESS = "🚪 Получить доступ"
@@ -26,7 +28,7 @@ BTN_ATTENDANCE_GRAPH = "📅 График"            # для директор�
 # НЕ съедали их и пропускали дальше по цепочке роутеров.
 ALL_MENU_BUTTONS = [
     BTN_MENU, BTN_START_ROLL, BTN_MY_CLASS, BTN_MEAL, BTN_ANALYTICS,
-    BTN_CHEF_MEAL, BTN_SCHOOL_SUMMARY, BTN_TEACHER_LIST, BTN_STUDENTS,
+    BTN_CHEF_MEAL, BTN_CHEF_FREE, BTN_SCHOOL_SUMMARY, BTN_EXPORT_ABSENCES, BTN_TEACHER_LIST, BTN_STUDENTS,
     BTN_REQUEST_ACCESS, BTN_DIRECTOR_CLASSES, BTN_ROLL_STATUS, BTN_SCHOOLS,
     BTN_ADMIN_MEAL, BTN_ATTENDANCE_GRAPH,
 ]
@@ -63,7 +65,7 @@ def build_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
     if role == Role.DIRECTOR:
         rows = [
             [KeyboardButton(text=BTN_SCHOOL_SUMMARY), KeyboardButton(text=BTN_DIRECTOR_CLASSES)],
-            [KeyboardButton(text=BTN_ATTENDANCE_GRAPH)],
+            [KeyboardButton(text=BTN_ATTENDANCE_GRAPH), KeyboardButton(text=BTN_EXPORT_ABSENCES)],
         ]
     elif role == Role.SUBJECT_TEACHER:
         rows = [[KeyboardButton(text=BTN_START_ROLL)]]
@@ -73,9 +75,11 @@ def build_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
             [KeyboardButton(text=BTN_MEAL), KeyboardButton(text=BTN_ANALYTICS)],
         ]
     elif role == Role.SECRETARY:
-        rows = [[KeyboardButton(text=BTN_ROLL_STATUS)]]
+        rows = [
+        [KeyboardButton(text=BTN_ROLL_STATUS)]],
+        [KeyboardButton(text=BTN_EXPORT_ABSENCES)],
     elif role == Role.CHEF:
-        rows = [[KeyboardButton(text=BTN_CHEF_MEAL)]]
+        rows = [[KeyboardButton(text=BTN_CHEF_MEAL), KeyboardButton(text=BTN_CHEF_FREE)]]
     else:
         rows = []
 

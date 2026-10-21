@@ -3,6 +3,11 @@ from aiogram import Router, F
 from aiogram.types import Message
 from datetime import date
 
+from aiogram.types import BufferedInputFile
+from core.keyboards import BTN_EXPORT_ABSENCES
+from repositories import get_absences_export_data
+from helpers.excel_export import generate_absences_excel
+
 from repositories import (
     is_school_done_today,
     get_absence_reason_counts,
@@ -41,3 +46,19 @@ async def roll_status(message: Message) -> None:
         lines.append(f"{reason}: {counts.get(reason, 0)}")
 
     await message.answer("\n".join(lines))
+
+
+@secretary_router.message(F.text == BTN_EXPORT_ABSENCES)
+async def export_absences_secretary(message: Message):
+    if not check_access(message.from_user.id, [Role.SECRETARY]):
+        await message.answer("Нет доступа.")
+        return
+
+    data = get_absences_export_data(1)
+    if not data:
+        await message.answer("Нет данных для отчета.")
+        return
+
+    file_bytes = generate_absences_excel(data)
+    document = BufferedInputFile(file_bytes, filename=f"absences_report.xlsx")
+    await message.answer_document(document, caption="📥 Отчет по пропускам")

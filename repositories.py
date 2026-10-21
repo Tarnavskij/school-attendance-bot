@@ -881,6 +881,57 @@ def get_meal_summary(school_id: int, target_date: date | None = None) -> str:
         return "\n".join(lines)
 
 
+def get_free_meals_report(school_id: int, target_date: date | None = None) -> str:
+    """
+    Возвращает текстовый отчёт по ученикам, питающимся сегодня бесплатно.
+    Сгруппировано по классам, классы по порядку, ученики по алфавиту.
+    """
+    if target_date is None:
+        target_date = date.today()
+
+    with get_db() as db:
+        # Все классы школы по порядку
+        classes = db.query(Class).filter(
+            Class.school_id == school_id
+        ).order_by(Class.grade, Class.letter).all()
+
+        # Все заявки на сегодня с загруженными учениками
+        requests = db.query(MealRequest).options(
+            joinedload(MealRequest.items).joinedload(MealRequestItem.student)
+        ).filter(
+            MealRequest.school_id == school_id,
+            MealRequest.request_date == target_date,
+        ).all()
+
+        req_by_class = {req.class_id: req for req in requests}
+
+        lines = [f"🆓 Отчет по питающимся \"бесплатно\" на {target_date.strftime('%d.%m.%Y')}"]
+        has_any = False
+
+        for cls in classes:
+            req = req_by_class.get(cls.id)
+            if not req:
+                continue
+
+            # Фильтруем: ест И бесплатно
+            free_students = [
+                item.student.name
+                for item in req.items
+                if item.is_eating and item.meal_type == "free"
+            ]
+
+            if free_students:
+                has_any = True
+                lines.append(f"\n{cls.name}")
+                # Сортируем имена по алфавиту
+                for name in sorted(free_students):
+                    lines.append(name)
+
+        if not has_any:
+            return f"🆓 На {target_date.strftime('%d.%m.%Y')} бесплатников нет."
+
+        return "\n".join(lines)
+
 # ===== Аналитика по классу =====
 
 def get_class_analytics(class_id: int, school_id: int,
@@ -1013,6 +1064,61 @@ def get_class_meal_summary(class_id: int, school_id: int,
         paid = sum(1 for i in eating_items if i.meal_type == "paid")
         free = total - paid
         return f"🔄 Обновление {req.class_.name}: всего {total} (платно {paid}, бесплатно {free})"
+
+
+def get_absences_export_data(school_id: int) -> dict:
+    """
+    Собирает данные для Excel-отчета по пропускам.
+    Возвращает словарь: { "5А": [ {"name": "Иванов И.", "total": 5, "sick": 3, ...} ] }
+    """
+    from core.constants import ABSENCE_REASONS, DEFAULT_ABSENCE_REASON
+
+    sick_str = ABSENCE_REASONS[0]
+    statement_str = ABSENCE_REASONS[1]
+    recuperation_str = ABSENCE_REASONS[2]
+    unexcused_str = ABSENCE_REASONS[3]
+
+    with get_db() as db:
+        classes = db.query(Class).filter(
+            Class.school_id == school_id
+        ).order_by(Class.grade, Class.letter).all()
+
+        result = {}
+
+        for cls in classes:
+            students = db.query(Student).filter(
+                Student.class_id == cls.id
+            ).order_by(Student.name).all()
+
+            class_data = []
+            for student in students:
+                records = db.query(AttendanceRecord).join(AttendanceSession).filter(
+                    AttendanceRecord.student_id == student.id,
+                    AttendanceSession.status.in_(["completed", "auto_completed"])
+                ).all()
+
+                absent_records = [r for r in records if not r.is_present]
+                total = len(absent_records)
+
+                sick = sum(1 for r in absent_records if r.reason == sick_str)
+                statement = sum(1 for r in absent_records if r.reason == statement_str)
+                recuperation = sum(1 for r in absent_records if r.reason == recuperation_str)
+                unexcused = sum(1 for r in absent_records if
+                                r.reason == unexcused_str or r.reason is None or r.reason == DEFAULT_ABSENCE_REASON)
+
+                class_data.append({
+                    "name": student.name,
+                    "total": total,
+                    "sick": sick,
+                    "statement": statement,
+                    "recuperation": recuperation,
+                    "unexcused": unexcused,
+                })
+
+            if class_data:
+                result[cls.name] = class_data
+
+        return result
 
 # ===== Охват питания =====
 
