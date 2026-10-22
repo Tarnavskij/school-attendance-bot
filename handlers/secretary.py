@@ -54,7 +54,9 @@ async def export_absences_secretary(message: Message):
         await message.answer("Нет доступа.")
         return
 
-    data = get_absences_export_data(1)
+    teacher = get_teacher_by_telegram_id(message.from_user.id)
+    school_id = teacher.school_id if teacher else 1
+    data = get_absences_export_data(school_id)
     if not data:
         await message.answer("Нет данных для отчета.")
         return
