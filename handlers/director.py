@@ -9,7 +9,7 @@ from repositories import get_absences_export_data
 from helpers.excel_export import generate_absences_excel
 
 from services import ReportService
-from repositories import get_all_classes, get_absent_students_today, get_default_school_id
+from repositories import get_all_classes, get_absent_students_today, get_default_school_id, get_teacher_by_telegram_id
 from core.keyboards import (
     BTN_SCHOOL_SUMMARY, BTN_DIRECTOR_CLASSES, BTN_ATTENDANCE_GRAPH,
     start_kb, back_to_menu_btn
@@ -175,7 +175,9 @@ async def export_absences_director(message: Message):
         await message.answer("Нет доступа.")
         return
 
-    data = get_absences_export_data(1)  # Пока хардкод 1, при переходе на single-tenant уберем
+    teacher = get_teacher_by_telegram_id(message.from_user.id)
+    school_id = teacher.school_id if teacher else 1
+    data = get_absences_export_data(school_id)
     if not data:
         await message.answer("Нет данных для отчета.")
         return
