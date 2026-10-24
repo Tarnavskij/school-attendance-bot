@@ -6,6 +6,7 @@ from aiogram.fsm.context import FSMContext
 from datetime import date
 from helpers.ui import reset_screen, set_screen
 
+from services import AttendanceService
 from repositories import (
     get_teacher_by_telegram_id,
     get_all_classes,
@@ -17,6 +18,8 @@ from repositories import (
     update_session_records,
     get_class_analytics,
     get_class_quarters_with_data,
+    get_session_records,
+    delete_session,
 )
 from core.keyboards import (
     BTN_MY_CLASS, BTN_ANALYTICS, build_menu_keyboard, back_to_menu_btn,
@@ -30,6 +33,7 @@ my_class_router = Router()
 
 class MyClassStates(StatesGroup):
     editing = State()
+    conducting = State()  # Состояние для мини-переклички
 
 
 @my_class_router.message(F.text == BTN_MY_CLASS)
@@ -172,7 +176,10 @@ async def _show_absent_list(message: Message, class_id: int, school_id: int, edi
 
     if session is None:
         text = f"📋 В классе {class_name} сегодня перекличка не проводилась."
-        kb = InlineKeyboardMarkup(inline_keyboard=[[back_to_menu_btn()]])
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="✍️ Провести перекличку", callback_data=f"mc:conduct:{class_id}")],
+            [back_to_menu_btn()]
+        ])
         return await _send_or_edit(message, text, kb, edit)
 
     if session["status"] == "active":
@@ -223,6 +230,128 @@ async def _send_or_edit(message, text, kb, edit):
         await message.edit_text(text, reply_markup=kb)
         return message
     return await message.answer(text, reply_markup=kb)
+
+
+# ── Мини-перекличка из "Моего класса" ──────────────────────────────────────
+
+@my_class_router.callback_query(F.data.startswith("mc:conduct:"))
+async def mc_conduct_start(callback: CallbackQuery, state: FSMContext) -> None:
+    user_id = callback.from_user.id
+    if not check_access(user_id, [Role.CLASS_TEACHER]):
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+
+    class_id = int(callback.data.split(":")[-1])
+    school_id = _get_school_id(user_id)
+
+    if not is_admin(user_id):
+        teacher = get_teacher_by_telegram_id(user_id)
+        if not teacher or teacher.class_id != class_id:
+            await callback.answer("Это не ваш класс.", show_alert=True)
+            return
+
+    session, result = AttendanceService.start_attendance(user_id, class_id, teacher_school_id=school_id)
+
+    if session is None:
+        # Если уже создана (гонка), просто обновляем экран
+        await callback.answer(result, show_alert=True)
+        await _show_absent_list(callback.message, class_id, school_id, edit=True)
+        return
+
+    await state.update_data(
+        session_id=session.id,
+        class_id=class_id,
+        school_id=school_id,
+    )
+    await state.set_state(MyClassStates.conducting)
+
+    students = get_students_by_class(class_id, school_id)
+    kb = _build_mc_marking_keyboard(students, session.id, [])
+
+    await callback.message.edit_text(
+        "✅ — присутствует   ❌ — отсутствует\n\nНажмите на ученика, чтобы изменить статус:",
+        reply_markup=kb,
+    )
+    await callback.answer()
+
+
+@my_class_router.callback_query(MyClassStates.conducting, F.data.startswith("mc:att_toggle:"))
+async def mc_att_toggle(callback: CallbackQuery, state: FSMContext) -> None:
+    parts = callback.data.split(":")
+    session_id = int(parts[2])
+    student_id = int(parts[3])
+
+    data = await state.get_data()
+    expected_session_id = data.get("session_id")
+    if expected_session_id is None or session_id != expected_session_id:
+        await callback.answer("Сессия недействительна.", show_alert=True)
+        return
+
+    AttendanceService.toggle_student(session_id, student_id)
+    school_id = data.get("school_id")
+    students = get_students_by_class(data["class_id"], school_id=school_id)
+    records = get_session_records(session_id)
+    kb = _build_mc_marking_keyboard(students, session_id, records)
+
+    await callback.message.edit_reply_markup(reply_markup=kb)
+    await callback.answer()
+
+
+@my_class_router.callback_query(MyClassStates.conducting, F.data.startswith("mc:att_submit:"))
+async def mc_att_submit(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    session_id = data.get("session_id")
+    class_id = data.get("class_id")
+    school_id = data.get("school_id")
+
+    if not session_id:
+        await callback.answer("Сессия истекла.", show_alert=True)
+        await state.clear()
+        return
+
+    AttendanceService.complete_session(session_id)
+    notify = getattr(callback.bot, "notify_web", None)
+    if notify:
+        await notify("summary_update")
+
+    await state.clear()
+    await callback.answer("Готово!")
+
+    # Сразу перерисовываем сообщение в экран "Мой класс" с отсутствующими
+    await _show_absent_list(callback.message, class_id, school_id, edit=True)
+
+
+@my_class_router.callback_query(MyClassStates.conducting, F.data == "mc:att_cancel")
+async def mc_att_cancel(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    session_id = data.get("session_id")
+    class_id = data.get("class_id")
+    school_id = data.get("school_id")
+
+    if session_id:
+        delete_session(session_id)
+
+    await state.clear()
+    await callback.answer("Отменено")
+
+    if class_id and school_id:
+        await _show_absent_list(callback.message, class_id, school_id, edit=True)
+
+
+def _build_mc_marking_keyboard(students, session_id: int, records: list) -> InlineKeyboardMarkup:
+    absent_ids = {r.student_id for r in records if not r.is_present}
+    buttons = [
+        [InlineKeyboardButton(
+            text=f"{'❌' if s.id in absent_ids else '✅'} {s.name}",
+            callback_data=f"mc:att_toggle:{session_id}:{s.id}",
+        )]
+        for s in students
+    ]
+    buttons.append([
+        InlineKeyboardButton(text="✅ Отправить", callback_data=f"mc:att_submit:{session_id}"),
+        InlineKeyboardButton(text="❌ Отмена", callback_data="mc:att_cancel"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 # ── Аналитика для классного руководителя ──────────────────────────────────
