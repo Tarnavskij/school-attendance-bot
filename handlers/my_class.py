@@ -5,6 +5,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from datetime import date
 from helpers.ui import reset_screen, set_screen
+from helpers.quarters import get_available_quarters
 
 from services import AttendanceService
 from repositories import (
@@ -33,7 +34,7 @@ my_class_router = Router()
 
 class MyClassStates(StatesGroup):
     editing = State()
-    conducting = State()  # Состояние для мини-переклички
+    conducting = State()
 
 
 @my_class_router.message(F.text == BTN_MY_CLASS)
@@ -145,7 +146,6 @@ async def apply_reason(callback: CallbackQuery) -> None:
 
 
 def _get_school_id(user_id: int) -> int:
-    """Возвращает school_id: для админа глобальный, для учителя из профиля."""
     if is_admin(user_id):
         return get_school_id_for_admin(user_id)
     teacher = get_teacher_by_telegram_id(user_id)
@@ -253,7 +253,6 @@ async def mc_conduct_start(callback: CallbackQuery, state: FSMContext) -> None:
     session, result = AttendanceService.start_attendance(user_id, class_id, teacher_school_id=school_id)
 
     if session is None:
-        # Если уже создана (гонка), просто обновляем экран
         await callback.answer(result, show_alert=True)
         await _show_absent_list(callback.message, class_id, school_id, edit=True)
         return
@@ -317,7 +316,6 @@ async def mc_att_submit(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await callback.answer("Готово!")
 
-    # Сразу перерисовываем сообщение в экран "Мой класс" с отсутствующими
     await _show_absent_list(callback.message, class_id, school_id, edit=True)
 
 
@@ -355,46 +353,6 @@ def _build_mc_marking_keyboard(students, session_id: int, records: list) -> Inli
 
 
 # ── Аналитика для классного руководителя ──────────────────────────────────
-
-def _quarters_for_today(today: date) -> list[dict]:
-    y, m = today.year, today.month
-    start_year = y if m >= 9 else y - 1
-
-    q_defs = [
-        ("1-я четверть", date(start_year, 9, 1), date(start_year, 10, 31)),
-        ("2-я четверть", date(start_year, 11, 1), date(start_year, 12, 31)),
-        ("3-я четверть", date(start_year + 1, 1, 1), date(start_year + 1, 3, 31)),
-        ("4-я четверть", date(start_year + 1, 4, 1), date(start_year + 1, 5, 31)),
-    ]
-
-    result = []
-    for label, d_from, d_to in q_defs:
-        if d_from <= today:
-            result.append({
-                "label": f"{label} {start_year}-{start_year + 1}",
-                "short_label": label,
-                "date_from": d_from,
-                "date_to": d_to,
-            })
-
-    if m == 9:
-        prev = start_year - 1
-        result.insert(0, {
-            "label": f"4-я четверть {prev}-{prev + 1}",
-            "short_label": "4-я четверть",
-            "date_from": date(prev + 1, 4, 1),
-            "date_to": date(prev + 1, 5, 31),
-        })
-
-    return list(reversed(result))
-
-
-def _find_quarter(date_from: date, date_to: date) -> dict | None:
-    for q in _quarters_for_today(date.today()):
-        if q["date_from"] == date_from and q["date_to"] == date_to:
-            return q
-    return None
-
 
 async def _show_analytics_summary(target, class_id: int, school_id: int,
                                   quarter: dict, edit: bool = False):
@@ -478,7 +436,7 @@ async def my_class_analytics(message: Message, state: FSMContext) -> None:
         await message.answer("У вас не указан класс. Обратитесь к администратору.")
         return
 
-    quarters = _quarters_for_today(date.today())
+    quarters = get_available_quarters(date.today())
     quarters = get_class_quarters_with_data(teacher.class_id, teacher.school_id, quarters)
 
     with_data = [q for q in quarters if q["total_absences"] > 0]
@@ -536,7 +494,7 @@ async def analytics_quarter(callback: CallbackQuery) -> None:
         await callback.answer("Ошибка данных.", show_alert=True)
         return
 
-    quarter = _find_quarter(d_from, d_to)
+    quarter = next((q for q in get_available_quarters(date.today()) if q["date_from"] == d_from), None)
     if not quarter:
         await callback.answer("Четверть не найдена.", show_alert=True)
         return
@@ -570,7 +528,7 @@ async def analytics_students(callback: CallbackQuery) -> None:
         await callback.answer("Ошибка данных.", show_alert=True)
         return
 
-    quarter = _find_quarter(d_from, d_to)
+    quarter = next((q for q in get_available_quarters(date.today()) if q["date_from"] == d_from), None)
     if not quarter:
         await callback.answer("Четверть не найдена.", show_alert=True)
         return

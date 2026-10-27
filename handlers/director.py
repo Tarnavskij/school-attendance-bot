@@ -1,22 +1,19 @@
 # handlers/director.py
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 from datetime import date
 
-from aiogram.types import BufferedInputFile
+from helpers.quarters import get_available_quarters
 from core.keyboards import BTN_EXPORT_ABSENCES
-from repositories import get_absences_export_data
+from repositories import get_absences_export_data, get_all_classes, get_absent_students_today, get_default_school_id, get_teacher_by_telegram_id
 from helpers.excel_export import generate_absences_excel
-
 from services import ReportService
-from repositories import get_all_classes, get_absent_students_today, get_default_school_id, get_teacher_by_telegram_id
 from core.keyboards import (
     BTN_SCHOOL_SUMMARY, BTN_DIRECTOR_CLASSES, BTN_ATTENDANCE_GRAPH,
     start_kb, back_to_menu_btn
 )
 from core.roles import check_access, Role
 from core.school_context import get_school_id_for_admin
-# Импорт для подключения к Sigur
 from sigur_reader import get_sigur_connection
 
 director_router = Router()
@@ -40,7 +37,6 @@ async def director_classes(message: Message) -> None:
 
 
 async def _show_class_list(target, edit: bool = False) -> None:
-    from repositories import get_teacher_by_telegram_id
     user_id = target.from_user.id if hasattr(target, 'from_user') else None
     if user_id:
         teacher = get_teacher_by_telegram_id(user_id)
@@ -98,7 +94,6 @@ async def back_to_class_list(callback: CallbackQuery) -> None:
 
 async def _show_absent_readonly(message: Message, class_id: int, user_id: int) -> None:
     today = date.today()
-    from repositories import get_teacher_by_telegram_id
     teacher = get_teacher_by_telegram_id(user_id)
     school_id = teacher.school_id if teacher else get_school_id_for_admin(user_id)
 
@@ -124,8 +119,6 @@ async def _show_absent_readonly(message: Message, class_id: int, user_id: int) -
 
     await message.edit_text(text, reply_markup=kb)
 
-
-# ===== НОВЫЙ ХЕНДЛЕР ДЛЯ КНОПКИ "ГРАФИК" =====
 
 @director_router.message(F.text == BTN_ATTENDANCE_GRAPH)
 async def attendance_graph(message: Message) -> None:
@@ -175,13 +168,90 @@ async def export_absences_director(message: Message):
         await message.answer("Нет доступа.")
         return
 
-    teacher = get_teacher_by_telegram_id(message.from_user.id)
-    school_id = teacher.school_id if teacher else 1
-    data = get_absences_export_data(school_id)
-    if not data:
-        await message.answer("Нет данных для отчета.")
+    quarters = get_available_quarters(date.today())
+    buttons = []
+    for q in quarters:
+        buttons.append([InlineKeyboardButton(
+            text=q["label"],
+            callback_data=f"exp_q:{q['date_from'].isoformat()}:{q['date_to'].isoformat()}"
+        )])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer("📥 Выберите период для экспорта:", reply_markup=kb)
+
+
+@director_router.callback_query(F.data.startswith("exp_q:"))
+async def export_choose_class(callback: CallbackQuery):
+    if not check_access(callback.from_user.id, [Role.DIRECTOR]):
+        await callback.answer("Нет доступа.", show_alert=True)
         return
 
-    file_bytes = generate_absences_excel(data)
-    document = BufferedInputFile(file_bytes, filename=f"absences_report.xlsx")
-    await message.answer_document(document, caption="📥 Отчет по пропускам")
+    _, d_from_str, d_to_str = callback.data.split(":")
+    d_from = date.fromisoformat(d_from_str)
+    d_to = date.fromisoformat(d_to_str)
+
+    q_info = next((q for q in get_available_quarters(date.today()) if q["date_from"] == d_from), None)
+    q_label = q_info["label"] if q_info else "Период"
+
+    teacher = get_teacher_by_telegram_id(callback.from_user.id)
+    school_id = teacher.school_id if teacher else 1
+    classes = get_all_classes(school_id)
+
+    buttons = []
+    for c in classes:
+        buttons.append([InlineKeyboardButton(
+            text=c.name,
+            callback_data=f"exp_c:{d_from_str}:{d_to_str}:{c.id}"
+        )])
+
+    buttons.append([InlineKeyboardButton(
+        text="📦 Все классы",
+        callback_data=f"exp_c:{d_from_str}:{d_to_str}:0"
+    )])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await callback.message.edit_text(f"📥 {q_label}\nВыберите класс:", reply_markup=kb)
+    await callback.answer()
+
+
+@director_router.callback_query(F.data.startswith("exp_c:"))
+async def export_generate_file(callback: CallbackQuery):
+    if not check_access(callback.from_user.id, [Role.DIRECTOR]):
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+
+    _, d_from_str, d_to_str, class_id_str = callback.data.split(":")
+    d_from = date.fromisoformat(d_from_str)
+    d_to = date.fromisoformat(d_to_str)
+    class_id = int(class_id_str)
+
+    teacher = get_teacher_by_telegram_id(callback.from_user.id)
+    school_id = teacher.school_id if teacher else 1
+
+    q_info = next((q for q in get_available_quarters(date.today()) if q["date_from"] == d_from), None)
+    q_label = q_info["short_label"] if q_info else "Период"
+
+    class_label = "Все классы"
+    if class_id != 0:
+        classes = get_all_classes(school_id)
+        c_obj = next((c for c in classes if c.id == class_id), None)
+        if c_obj:
+            class_label = c_obj.name
+
+    await callback.message.edit_text(f"⏳ Формирую отчет за {q_label} ({class_label})...")
+
+    data = get_absences_export_data(school_id, class_id if class_id != 0 else None, d_from, d_to)
+    if not data:
+        await callback.message.edit_text("❌ Нет данных для отчета за этот период.")
+        return
+
+    title_info = f"{q_label} — {class_label}"
+    file_bytes = generate_absences_excel(data, title_info=title_info)
+
+    safe_filename = title_info.replace(" ", "_").replace("—", "").replace("-", "")
+    filename = f"absences_{safe_filename}.xlsx"
+
+    document = BufferedInputFile(file_bytes, filename=filename)
+    await callback.message.edit_text("✅ Отчет сформирован!")
+    await callback.message.answer_document(document, caption=f"📥 Отчет по пропускам: {title_info}")
+    await callback.answer()
