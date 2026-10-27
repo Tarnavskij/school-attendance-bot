@@ -90,6 +90,12 @@ def get_default_school_id() -> int:
         db.commit()
         return new_school.id
 
+def get_all_active_telegram_ids() -> list[int]:
+    """Возвращает ID всех активных учителей для рассылки."""
+    with get_db() as db:
+        teachers = db.query(Teacher.telegram_id).filter(Teacher.is_active == True).all()
+        return [t[0] for t in teachers]
+
 def get_teacher_by_telegram_id(telegram_id: int) -> TeacherDTO | None:
     with get_db() as db:
         t = db.query(Teacher).options(joinedload(Teacher.school)).filter(

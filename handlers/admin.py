@@ -14,7 +14,6 @@ from aiogram.fsm.context import FSMContext
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 
-# Импортируем новые FSM-компоненты из meals вместо _get_state
 from handlers.meals import MealStates, render_meal_keyboard
 
 from repositories import (
@@ -26,6 +25,7 @@ from repositories import (
     reset_today_sessions, get_all_schools,
     get_teachers_paginated, get_students_by_class_paginated,
     ensure_admin_teacher, get_or_create_meal_request,
+    get_all_active_telegram_ids
 )
 from core.validators import validate_safe_text, ValidationError, excel_safe
 from services import ReportService
@@ -234,7 +234,7 @@ async def noop(callback: CallbackQuery) -> None:
 async def back_to_teacher_list(callback: CallbackQuery) -> None:
     if not is_admin(callback.from_user.id):
         return
-    await _show_teacher_page(callback.message, page=1, edit=True)
+    await _show_teacher_page(callback.message, page=1, user_id=callback.from_user.id, edit=True)
     await callback.answer()
 
 
@@ -387,7 +387,7 @@ async def permanent_delete_execute(callback: CallbackQuery) -> None:
     school_id = get_school_id_for_admin(callback.from_user.id)
     if delete_teacher(teacher_id, school_id):
         await callback.answer("Учитель удалён. История сохранена.")
-        await _show_teacher_page(callback.message, page=1, edit=True)
+        await _show_teacher_page(callback.message, page=1, user_id=callback.from_user.id, edit=True)
     else:
         await callback.answer("Ошибка.")
 
@@ -674,7 +674,7 @@ async def switch_school(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
-# ===== Управление питанием для администратора (ИСПРАВЛЕНО) =====
+# ===== Управление питанием для администратора =====
 
 @admin_router.message(F.text == BTN_ADMIN_MEAL)
 async def admin_meal_menu(message: Message):
@@ -719,9 +719,8 @@ async def admin_meal_class_chosen(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
-# ===== График посещаемости для администратора (ИСПРАВЛЕНО) =====
+# ===== График посещаемости =====
 
-# Добавлен lambda-фильтр, чтобы хендлер срабатывал только для админа
 @admin_router.message(F.text == BTN_ATTENDANCE_GRAPH, lambda msg: is_admin(msg.from_user.id))
 async def admin_attendance_graph(message: Message) -> None:
     today = date.today().strftime('%Y-%m-%d')
@@ -760,6 +759,8 @@ async def admin_attendance_graph(message: Message) -> None:
         await message.answer(f"⚠️ Ошибка при получении данных: {e}")
 
 
+# ===== Восстановление админа =====
+
 @admin_router.message(Command("restore_admin"))
 async def restore_admin(message: Message) -> None:
     if message.from_user.id != ADMIN_TELEGRAM_ID:
@@ -780,3 +781,30 @@ async def restore_admin(message: Message) -> None:
             await message.answer("Вы не найдены в базе.")
     finally:
         db.close()
+
+
+# ===== Рассылка для обновления клавиатур =====
+
+@admin_router.message(Command("broadcast"))
+async def broadcast_menu(message: Message):
+    if message.from_user.id != ADMIN_TELEGRAM_ID:
+        await message.answer("У вас нет прав.")
+        return
+
+    await message.answer("⏳ Начинаю рассылку обновлений...")
+
+    telegram_ids = get_all_active_telegram_ids()
+    count = 0
+    for tid in telegram_ids:
+        try:
+            await message.bot.send_message(
+                tid,
+                "🔄 <b>Обновление интерфейса!</b>\nНажмите /menu, чтобы увидеть новые кнопки.",
+                parse_mode="HTML",
+                reply_markup=build_menu_keyboard(tid)
+            )
+            count += 1
+        except Exception:
+            pass
+
+    await message.answer(f"✅ Рассылка завершена! Клавиатура обновлена у {count} пользователей.")

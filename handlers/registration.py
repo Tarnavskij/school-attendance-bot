@@ -1,5 +1,6 @@
 # handlers/registration.py
 import re
+import time
 
 from aiogram import Router, F, Bot
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -12,15 +13,12 @@ from repositories import (
     get_all_classes,
     get_all_schools,
     has_pending_request,
-    get_default_school_id,  # <-- импортировали функцию
+    get_default_school_id,
 )
 from core.keyboards import BTN_REQUEST_ACCESS, access_request_kb
-from config import ADMIN_TELEGRAM_ID  # <-- убрали DEFAULT_SCHOOL_ID
+from config import ADMIN_TELEGRAM_ID
 from core.roles import ROLE_LABELS, Role
 from database import SessionLocal, RegistrationRequest
-# Простая защита от спама заявками: не более 1 попытки начать регистрацию
-# с одного telegram_id за COOLDOWN_SECONDS секунд.
-import time
 
 _registration_attempts: dict[int, float] = {}
 _REGISTRATION_COOLDOWN_SECONDS = 60
@@ -49,7 +47,6 @@ _ERR_SURNAME = (
 
 
 def _validate_name_part(text: str) -> bool:
-    """Возвращает True, если текст проходит валидацию имени/фамилии."""
     return bool(_NAME_RE.match(text))
 
 
@@ -59,14 +56,12 @@ class RegistrationStates(StatesGroup):
     waiting_name = State()
     waiting_surname = State()
     choosing_role = State()
-    # choosing_school = State()  # Удалено — школа всегда одна
     choosing_class = State()
 
 
 # ── Отмена регистрации при /start или /menu ───────────────────────────────────
 
 async def _cancel_registration(message: Message, state: FSMContext) -> None:
-    """Сбрасывает FSM и сообщает пользователю об отмене."""
     await state.clear()
     await message.answer(
         "Регистрация отменена. Если захотите попробовать снова — нажмите кнопку ниже.",
@@ -81,12 +76,8 @@ async def cancel_on_command(message: Message, state: FSMContext) -> None:
     await _cancel_registration(message, state)
 
 
-# Для шагов с выбором через inline-кнопки команды тоже должны отменять процесс.
-# Поскольку choosing_class ожидает callback, а не текст,
-# перехватываем любое текстовое сообщение в этом состоянии.
 @registration_router.message(RegistrationStates.choosing_class)
 async def cancel_on_text_during_inline(message: Message, state: FSMContext) -> None:
-    """Любой текст (включая команды) во время выбора класса — отмена."""
     await _cancel_registration(message, state)
 
 
@@ -96,22 +87,10 @@ async def cancel_on_text_during_inline(message: Message, state: FSMContext) -> N
 async def start_registration(message: Message, state: FSMContext) -> None:
     user_id = message.from_user.id
 
-    # Защита от спама: ограничение частоты попыток регистрации
-    now = time.time()
-    last_attempt = _registration_attempts.get(user_id, 0)
-    if now - last_attempt < _REGISTRATION_COOLDOWN_SECONDS:
-        await message.answer(
-            "Пожалуйста, подождите немного перед повторной попыткой."
-        )
-        return
-    _registration_attempts[user_id] = now
-
-    # Уже зарегистрирован и активен
     if get_teacher_by_telegram_id(user_id):
         await message.answer("Вы уже зарегистрированы. Нажмите /menu.")
         return
 
-    # Проверяем, есть ли незакрытая заявка (для единственной школы)
     if has_pending_request(user_id, get_default_school_id()):
         await message.answer(
             "Вы уже подали заявку и она ожидает рассмотрения. "
@@ -119,7 +98,16 @@ async def start_registration(message: Message, state: FSMContext) -> None:
         )
         return
 
-    # Сбрасываем возможное «зависшее» FSM-состояние от предыдущей попытки
+    # Защита от спама: проверяем только если пользователь НЕ в процессе регистрации
+    current_state = await state.get_state()
+    if current_state is None:
+        now = time.time()
+        last_attempt = _registration_attempts.get(user_id, 0)
+        if now - last_attempt < _REGISTRATION_COOLDOWN_SECONDS:
+            await message.answer("Пожалуйста, подождите немного перед повторной попыткой.")
+            return
+        _registration_attempts[user_id] = now
+
     await state.clear()
     await state.set_state(RegistrationStates.waiting_name)
     await message.answer(
@@ -189,25 +177,23 @@ async def cancel_inline(callback: CallbackQuery, state: FSMContext) -> None:
 @registration_router.callback_query(RegistrationStates.choosing_role, F.data.startswith("reg:role:"))
 async def role_chosen(callback: CallbackQuery, state: FSMContext) -> None:
     role = callback.data.split(":")[-1]
-    # Разрешаем все роли, кроме ADMIN
     if role not in (Role.CLASS_TEACHER, Role.SUBJECT_TEACHER, Role.SECRETARY, Role.DIRECTOR, Role.CHEF):
         await callback.answer("Неверный выбор, попробуйте ещё раз.", show_alert=True)
         return
 
     await state.update_data(role=role)
-    # Школа всегда одна — получаем автоматически
     await state.update_data(school_id=get_default_school_id())
     await callback.answer()
     await _proceed_after_school(callback, state, role)
 
 
-# ── Шаг 3 (продолжение): выбор класса (только для классного руководителя) ───
+# ── Шаг 3 (продолжение): выбор класса ───
 
 async def _proceed_after_school(
     callback: CallbackQuery, state: FSMContext, role: str
 ) -> None:
     if role == Role.CLASS_TEACHER:
-        school_id = get_default_school_id()  # всегда одна школа
+        school_id = get_default_school_id()
 
         classes = get_all_classes(school_id)
         if not classes:
@@ -228,7 +214,6 @@ async def _proceed_after_school(
             reply_markup=kb,
         )
     else:
-        # Для остальных ролей класс не нужен
         saved = await _save_and_notify(
             callback.from_user.id, state, callback.bot, class_id=None, school_id=get_default_school_id()
         )
@@ -271,7 +256,7 @@ async def class_chosen(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
 
 
-# ── Сохранение заявки и уведомление администратора ───────────────────────────
+# ── Сохранение заявки ───────────────────────────
 
 async def _save_and_notify(
     user_id: int,
@@ -280,11 +265,6 @@ async def _save_and_notify(
     class_id: int | None,
     school_id: int,
 ) -> bool:
-    """
-    Сохраняет заявку в базу и уведомляет администратора.
-    Возвращает True при успехе, False если pending-заявка уже существует.
-    """
-    # Финальная проверка на дубль прямо перед сохранением
     if has_pending_request(user_id, school_id):
         return False
 
@@ -292,7 +272,6 @@ async def _save_and_notify(
     name = f"{data.get('name', '')} {data.get('surname', '')}".strip()
     role = data.get("role", Role.SUBJECT_TEACHER)
 
-    # Получаем имя класса для хранения в заявке
     class_name: str | None = None
     if class_id is not None:
         from database import Class as ClassModel
@@ -303,7 +282,6 @@ async def _save_and_notify(
         finally:
             db.close()
 
-    # Получаем название школы (для уведомления)
     schools = get_all_schools()
     school_name = next((s["name"] for s in schools if s["id"] == school_id), "Неизвестная школа")
 
