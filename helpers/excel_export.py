@@ -4,19 +4,22 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment
 
 
-def generate_absences_excel(data: dict) -> bytes:
+def generate_absences_excel(data: dict, title_info: str = "Все классы") -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Пропуски"
 
+    # Заголовок отчета
+    ws.cell(row=1, column=1, value=f"Отчет по пропускам: {title_info}").font = Font(bold=True, size=12)
+
     headers = ["Класс", "ФИО", "Всего", "По болезни", "На оздоровлении", "По заявлению", "Без уважительной"]
 
     for col, h in enumerate(headers, 1):
-        cell = ws.cell(row=1, column=col, value=h)
+        cell = ws.cell(row=3, column=col, value=h)
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal="center")
 
-    row_num = 2
+    row_num = 4
     for class_name, students in data.items():
         for s in students:
             ws.cell(row=row_num, column=1, value=class_name)

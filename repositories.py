@@ -78,23 +78,19 @@ class SessionAlreadyExists(Exception):
     pass
 
 
-# ===== Учителя (требуют school_id) =====
-
+# ===== Учителя =====
 
 def get_default_school_id() -> int:
-    """Возвращает ID первой школы в БД. Если школ нет – создаёт дефолтную."""
     with get_db() as db:
         school = db.query(School).first()
         if school:
             return school.id
-        # Если школ нет – создаём (аналогично web_viewer.py)
         new_school = School(name="Основная школа")
         db.add(new_school)
         db.commit()
         return new_school.id
 
 def get_teacher_by_telegram_id(telegram_id: int) -> TeacherDTO | None:
-    """Возвращает активного учителя в любой школе."""
     with get_db() as db:
         t = db.query(Teacher).options(joinedload(Teacher.school)).filter(
             Teacher.telegram_id == telegram_id,
@@ -184,7 +180,6 @@ def update_teacher_class(teacher_id: int, class_id: int | None, school_id: int) 
 
 
 def delete_teacher(teacher_id: int, school_id: int) -> bool:
-    """Физическое удаление учителя и всех его заявок в этой школе."""
     with get_db() as db:
         t = db.query(Teacher).filter(Teacher.id == teacher_id,
                                      Teacher.school_id == school_id).first()
@@ -228,7 +223,6 @@ def get_all_classes(school_id: int) -> list[ClassDTO]:
 
 
 def get_available_classes(today_date: date, school_id: int) -> list[ClassDTO]:
-    """Возвращает классы, в которых сегодня ещё НЕ проводилась перекличка."""
     with get_db() as db:
         taken_ids = (
             db.query(AttendanceSession.class_id)
@@ -422,11 +416,6 @@ def get_absent_students_today(class_id: int, today_date: date,
         return result
 
 def get_class_session_today(class_id: int, target_date: date, school_id: int) -> dict | None:
-    """
-    Возвращает сессию за указанную дату для класса (любого статуса) или None.
-    Формат: {"id": int, "class_id": int, "class_name": str, "status": str,
-             "records": [{"student_id": int, "is_present": bool, "reason": str | None}, ...]}
-    """
     with get_db() as db:
         sess = db.query(AttendanceSession).options(
             joinedload(AttendanceSession.class_),
@@ -454,10 +443,6 @@ def update_session_records(
     session_id: int,
     updates: list[tuple[int, bool, str | None]],
 ) -> None:
-    """
-    Массовое обновление записей сессии.
-    updates: список кортежей (student_id, is_present, reason).
-    """
     with get_db() as db:
         for student_id, is_present, reason in updates:
             db.query(AttendanceRecord).filter(
@@ -823,12 +808,10 @@ def get_meal_summary(school_id: int, target_date: date | None = None) -> str:
     if target_date is None:
         target_date = date.today()
     with get_db() as db:
-        # Все классы школы в порядке возрастания (1А, 1Б, 1В, 2А, ... 11Б)
         classes = db.query(Class).filter(
             Class.school_id == school_id
         ).order_by(Class.grade, Class.letter).all()
 
-        # Все заявки на дату
         requests = db.query(MealRequest).options(
             joinedload(MealRequest.class_),
             joinedload(MealRequest.submitted_by),
@@ -838,22 +821,18 @@ def get_meal_summary(school_id: int, target_date: date | None = None) -> str:
             MealRequest.request_date == target_date,
         ).all()
 
-        # Если на дату ни одной заявки — короткое сообщение
         if not requests:
             return f"🍽️ На {target_date.strftime('%d.%m.%Y')} заявок нет."
 
-        # Заявки по class_id — для быстрого поиска при обходе классов
         requests_by_class = {req.class_id: req for req in requests}
-
-        primary_lines = []   # 1–4 классы
-        senior_lines = []    # 5–11 классы
+        primary_lines = []
+        senior_lines = []
 
         for cls in classes:
             grade = cls.grade or 0
             req = requests_by_class.get(cls.id)
 
             if req:
-                # ФИЛЬТРУЕМ ТОЛЬКО ТЕХ, КТО ЕСТ
                 eating_items = [i for i in req.items if i.is_eating]
                 total = len(eating_items)
                 paid = sum(1 for i in eating_items if i.meal_type == "paid")
@@ -882,20 +861,14 @@ def get_meal_summary(school_id: int, target_date: date | None = None) -> str:
 
 
 def get_free_meals_report(school_id: int, target_date: date | None = None) -> str:
-    """
-    Возвращает текстовый отчёт по ученикам, питающимся сегодня бесплатно.
-    Сгруппировано по классам, классы по порядку, ученики по алфавиту.
-    """
     if target_date is None:
         target_date = date.today()
 
     with get_db() as db:
-        # Все классы школы по порядку
         classes = db.query(Class).filter(
             Class.school_id == school_id
         ).order_by(Class.grade, Class.letter).all()
 
-        # Все заявки на сегодня с загруженными учениками
         requests = db.query(MealRequest).options(
             joinedload(MealRequest.items).joinedload(MealRequestItem.student)
         ).filter(
@@ -904,7 +877,6 @@ def get_free_meals_report(school_id: int, target_date: date | None = None) -> st
         ).all()
 
         req_by_class = {req.class_id: req for req in requests}
-
         lines = [f"🆓 Отчет по питающимся \"бесплатно\" на {target_date.strftime('%d.%m.%Y')}"]
         has_any = False
 
@@ -913,7 +885,6 @@ def get_free_meals_report(school_id: int, target_date: date | None = None) -> st
             if not req:
                 continue
 
-            # Фильтруем: ест И бесплатно
             free_students = [
                 item.student.name
                 for item in req.items
@@ -923,7 +894,6 @@ def get_free_meals_report(school_id: int, target_date: date | None = None) -> st
             if free_students:
                 has_any = True
                 lines.append(f"\n{cls.name}")
-                # Сортируем имена по алфавиту
                 for name in sorted(free_students):
                     lines.append(name)
 
@@ -936,17 +906,6 @@ def get_free_meals_report(school_id: int, target_date: date | None = None) -> st
 
 def get_class_analytics(class_id: int, school_id: int,
                         date_from: date, date_to: date) -> dict:
-    """
-    Аналитика по классу за период.
-
-    Возвращает:
-      students       — [{id, name, total, by_reason: {reason: count}}, ...] по алфавиту
-      by_reason      — {reason: count} — сводка по причинам
-      top_students   — до 5 учеников с пропусками, отсортированных по убыванию
-      top_student    — {name, count} или None
-      top_reason     — {name, count} или None
-      total_absences — общее количество пропусков
-    """
     from collections import Counter, defaultdict
     from core.constants import DEFAULT_ABSENCE_REASON
 
@@ -1018,10 +977,6 @@ def get_class_analytics(class_id: int, school_id: int,
 
 def get_class_quarters_with_data(class_id: int, school_id: int,
                                  quarters: list[dict]) -> list[dict]:
-    """
-    Из переданного списка четвертей оставляет только те, где есть данные.
-    К каждой добавляет total_absences.
-    """
     if not quarters:
         return []
     with get_db() as db:
@@ -1058,7 +1013,6 @@ def get_class_meal_summary(class_id: int, school_id: int,
         ).first()
         if not req:
             return "Заявка не найдена."
-        # ФИЛЬТРУЕМ ТОЛЬКО ТЕХ, КТО ЕСТ
         eating_items = [i for i in req.items if i.is_eating]
         total = len(eating_items)
         paid = sum(1 for i in eating_items if i.meal_type == "paid")
@@ -1066,11 +1020,8 @@ def get_class_meal_summary(class_id: int, school_id: int,
         return f"🔄 Обновление {req.class_.name}: всего {total} (платно {paid}, бесплатно {free})"
 
 
-def get_absences_export_data(school_id: int) -> dict:
-    """
-    Собирает данные для Excel-отчета по пропускам.
-    Возвращает словарь: { "5А": [ {"name": "Иванов И.", "total": 5, "sick": 3, ...} ] }
-    """
+def get_absences_export_data(school_id: int, class_id: int = None, date_from: date = None,
+                             date_to: date = None) -> dict:
     from core.constants import ABSENCE_REASONS, DEFAULT_ABSENCE_REASON
 
     sick_str = ABSENCE_REASONS[0]
@@ -1079,9 +1030,10 @@ def get_absences_export_data(school_id: int) -> dict:
     unexcused_str = ABSENCE_REASONS[3]
 
     with get_db() as db:
-        classes = db.query(Class).filter(
-            Class.school_id == school_id
-        ).order_by(Class.grade, Class.letter).all()
+        q_classes = db.query(Class).filter(Class.school_id == school_id)
+        if class_id:
+            q_classes = q_classes.filter(Class.id == class_id)
+        classes = q_classes.order_by(Class.grade, Class.letter).all()
 
         result = {}
 
@@ -1092,10 +1044,16 @@ def get_absences_export_data(school_id: int) -> dict:
 
             class_data = []
             for student in students:
-                records = db.query(AttendanceRecord).join(AttendanceSession).filter(
+                q_records = db.query(AttendanceRecord).join(AttendanceSession).filter(
                     AttendanceRecord.student_id == student.id,
                     AttendanceSession.status.in_(["completed", "auto_completed"])
-                ).all()
+                )
+                if date_from:
+                    q_records = q_records.filter(AttendanceSession.session_date >= date_from)
+                if date_to:
+                    q_records = q_records.filter(AttendanceSession.session_date <= date_to)
+
+                records = q_records.all()
 
                 absent_records = [r for r in records if not r.is_present]
                 total = len(absent_records)
@@ -1129,11 +1087,6 @@ _MONTH_NAMES_RU = [
 
 
 def get_meal_coverage_months(school_id: int) -> list[dict]:
-    """
-    Список месяцев, в которых есть завершённые переклички.
-    Сортировка — от новых к старым.
-    Формат: [{"year": 2025, "month": 9, "label": "Сентябрь 2025"}, ...]
-    """
     with get_db() as db:
         rows = (
             db.query(
@@ -1155,13 +1108,6 @@ def get_meal_coverage_months(school_id: int) -> list[dict]:
 
 
 def get_meal_coverage(year: int, month: int, school_id: int) -> dict:
-    """
-    Коэффициенты охвата питания за месяц, отдельно для начальной (1–4)
-    и старшей (5–11) школы:
-      дни = число уникальных дат с завершённой перекличкой в этой группе
-      отсутствия = сумма AttendanceRecord.is_present == False по этим сессиям
-      коэффициент = отсутствия / дни
-    """
     label = f"{_MONTH_NAMES_RU[month - 1]} {year}"
 
     primary_dates: set = set()
@@ -1246,10 +1192,9 @@ def ensure_admin_teacher(telegram_id: int, school_id: int) -> None:
                 is_active=True,
             ))
 
-# ===== НОВОЕ: интеграция с СКУД Sigur =====
+# ===== Интеграция с СКУД Sigur =====
 
 def get_teacher_by_card_number(card_number: str, school_id: int) -> TeacherDTO | None:
-    """Ищет активного учителя по номеру карты в указанной школе."""
     with get_db() as db:
         t = db.query(Teacher).options(joinedload(Teacher.school)).filter(
             Teacher.card_number == card_number,
@@ -1268,7 +1213,6 @@ def get_teacher_by_card_number(card_number: str, school_id: int) -> TeacherDTO |
         )
 
 def update_teacher_status(teacher_id: int, is_inside: bool) -> None:
-    """Обновляет статус нахождения внутри школы."""
     with get_db() as db:
         t = db.query(Teacher).filter(Teacher.id == teacher_id).first()
         if t:
