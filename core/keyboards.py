@@ -76,7 +76,7 @@ def build_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         ]
     elif role == Role.SECRETARY:
         rows = [
-        [KeyboardButton(text=BTN_ROLL_STATUS)]],
+        [KeyboardButton(text=BTN_ROLL_STATUS)],
         [KeyboardButton(text=BTN_EXPORT_ABSENCES)],
     elif role == Role.CHEF:
         rows = [[KeyboardButton(text=BTN_CHEF_MEAL), KeyboardButton(text=BTN_CHEF_FREE)]]
