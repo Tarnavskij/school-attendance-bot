@@ -24,8 +24,6 @@ BTN_ADMIN_MEAL = "🍽️ Управление питанием"    # для а�
 BTN_ATTENDANCE_GRAPH = "📅 График"            # для директора и админа
 
 # Все reply-кнопки, которые пользователь может нажать в любой момент.
-# Нужны, чтобы state-хендлеры (например, «напишите, а не нажимайте кнопки»)
-# НЕ съедали их и пропускали дальше по цепочке роутеров.
 ALL_MENU_BUTTONS = [
     BTN_MENU, BTN_START_ROLL, BTN_MY_CLASS, BTN_MEAL, BTN_ANALYTICS,
     BTN_CHEF_MEAL, BTN_CHEF_FREE, BTN_SCHOOL_SUMMARY, BTN_EXPORT_ABSENCES, BTN_TEACHER_LIST, BTN_STUDENTS,
@@ -53,7 +51,7 @@ def build_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
             [KeyboardButton(text=BTN_SCHOOL_SUMMARY), KeyboardButton(text=BTN_TEACHER_LIST)],
             [KeyboardButton(text=BTN_STUDENTS), KeyboardButton(text=BTN_SCHOOLS)],
             [KeyboardButton(text=BTN_ADMIN_MEAL)],
-            [KeyboardButton(text=BTN_ATTENDANCE_GRAPH)],  # новая кнопка для админа
+            [KeyboardButton(text=BTN_ATTENDANCE_GRAPH)],
         ]
         return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
@@ -76,8 +74,9 @@ def build_menu_keyboard(user_id: int) -> ReplyKeyboardMarkup:
         ]
     elif role == Role.SECRETARY:
         rows = [
-        [KeyboardButton(text=BTN_ROLL_STATUS)],
-        [KeyboardButton(text=BTN_EXPORT_ABSENCES)],
+            [KeyboardButton(text=BTN_ROLL_STATUS)],
+            [KeyboardButton(text=BTN_EXPORT_ABSENCES)],
+        ]
     elif role == Role.CHEF:
         rows = [[KeyboardButton(text=BTN_CHEF_MEAL), KeyboardButton(text=BTN_CHEF_FREE)]]
     else:
