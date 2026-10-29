@@ -190,20 +190,46 @@ async def export_choose_class(callback: CallbackQuery):
     school_id = teacher.school_id if teacher else 1
     classes = get_all_classes(school_id)
 
-    buttons = []
+    # Группировка по параллелям (5, 6, 7...)
+    groups: dict[int, list] = {}
     for c in classes:
-        buttons.append([InlineKeyboardButton(
-            text=c.name,
-            callback_data=f"exp_c:{d_from_str}:{d_to_str}:{c.id}"
-        )])
+        grade = c.grade or 0
+        groups.setdefault(grade, []).append(c)
 
+    buttons = []
+    for grade in sorted(groups.keys()):
+        row = []
+        for c in groups[grade]:
+            row.append(InlineKeyboardButton(
+                text=c.name,
+                callback_data=f"exp_c:{d_from_str}:{d_to_str}:{c.id}"
+            ))
+        buttons.append(row)
+
+    # Дополнительные кнопки
     buttons.append([InlineKeyboardButton(
         text="📦 Все классы",
         callback_data=f"exp_c:{d_from_str}:{d_to_str}:0"
     )])
+    buttons.append([InlineKeyboardButton(text="🔙 Назад к четвертям", callback_data="exp_back_q")])
 
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     await callback.message.edit_text(f"📥 {q_label}\nВыберите класс:", reply_markup=kb)
+    await callback.answer()
+
+
+# Добавь этот хендлер ниже
+@director_router.callback_query(F.data == "exp_back_q", lambda cb: check_access(cb.from_user.id, [Role.DIRECTOR]))
+async def export_back_quarters(callback: CallbackQuery):
+    quarters = get_available_quarters(date.today())
+    buttons = []
+    for q in quarters:
+        buttons.append([InlineKeyboardButton(
+            text=q["label"],
+            callback_data=f"exp_q:{q['date_from'].isoformat()}:{q['date_to'].isoformat()}"
+        )])
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await callback.message.edit_text("📥 Выберите период для экспорта:", reply_markup=kb)
     await callback.answer()
 
 
