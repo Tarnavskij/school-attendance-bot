@@ -162,12 +162,9 @@ async def attendance_graph(message: Message) -> None:
         await message.answer(f"⚠️ Ошибка при получении данных: {e}")
 
 
-@director_router.message(F.text == BTN_EXPORT_ABSENCES)
+# ДОБАВЛЕНА ПРОВЕРКА РОЛИ В ФИЛЬТР, ЧТОБЫ НЕ ПЕРЕХВАТЫВАТЬ КНОПКИ СЕКРЕТАРЯ
+@director_router.message(F.text == BTN_EXPORT_ABSENCES, lambda msg: check_access(msg.from_user.id, [Role.DIRECTOR]))
 async def export_absences_director(message: Message):
-    if not check_access(message.from_user.id, [Role.DIRECTOR]):
-        await message.answer("Нет доступа.")
-        return
-
     quarters = get_available_quarters(date.today())
     buttons = []
     for q in quarters:
@@ -180,12 +177,8 @@ async def export_absences_director(message: Message):
     await message.answer("📥 Выберите период для экспорта:", reply_markup=kb)
 
 
-@director_router.callback_query(F.data.startswith("exp_q:"))
+@director_router.callback_query(F.data.startswith("exp_q:"), lambda cb: check_access(cb.from_user.id, [Role.DIRECTOR]))
 async def export_choose_class(callback: CallbackQuery):
-    if not check_access(callback.from_user.id, [Role.DIRECTOR]):
-        await callback.answer("Нет доступа.", show_alert=True)
-        return
-
     _, d_from_str, d_to_str = callback.data.split(":")
     d_from = date.fromisoformat(d_from_str)
     d_to = date.fromisoformat(d_to_str)
@@ -214,12 +207,8 @@ async def export_choose_class(callback: CallbackQuery):
     await callback.answer()
 
 
-@director_router.callback_query(F.data.startswith("exp_c:"))
+@director_router.callback_query(F.data.startswith("exp_c:"), lambda cb: check_access(cb.from_user.id, [Role.DIRECTOR]))
 async def export_generate_file(callback: CallbackQuery):
-    if not check_access(callback.from_user.id, [Role.DIRECTOR]):
-        await callback.answer("Нет доступа.", show_alert=True)
-        return
-
     _, d_from_str, d_to_str, class_id_str = callback.data.split(":")
     d_from = date.fromisoformat(d_from_str)
     d_to = date.fromisoformat(d_to_str)
