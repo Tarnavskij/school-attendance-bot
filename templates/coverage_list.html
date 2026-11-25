@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block title %}Охват питания{% endblock %}
+{% block page_title %}📊 Охват питания{% endblock %}
+
+{% block content %}
+<div class="card">
+    <p style="color:var(--text-muted);margin-top:0">
+        Выберите месяц, чтобы увидеть среднее число отсутствующих учеников в день.
+    </p>
+
+    {% if months %}
+    <div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(200px, 1fr));gap:12px;margin-top:16px;">
+        {% for m in months %}
+        <a href="/meals/coverage/{{ m.year }}/{{ m.month }}" class="btn btn-primary" style="justify-content:center;">
+            {{ m.label }}
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">Нет данных о перекличках</div>
+    {% endif %}
+
+    <div style="margin-top:24px;">
+        <a href="/meals" class="btn btn-ghost btn-sm">← Назад к питанию</a>
+    </div>
+</div>
+{% endblock %}

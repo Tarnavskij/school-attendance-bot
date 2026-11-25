@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+
+{% block title %}Питание{% endblock %}
+{% block page_title %}🍽️ Питание{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="toolbar">
+        <form method="get" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+            <label class="form-label" for="dateInput">Дата:</label>
+            <input type="date" id="dateInput" name="date" value="{{ date }}">
+            <button type="submit" class="btn btn-primary">Показать</button>
+        </form>
+        <a href="/download_meal_excel?date={{ date }}&type=short" class="btn btn-success">📥 Краткий Excel</a>
+        <a href="/download_meal_excel?date={{ date }}&type=full" class="btn btn-success">📥 Полный Excel</a>
+        <a href="/meals/coverage" class="btn btn-ghost">📊 Охват питания</a>
+    </div>
+</div>
+
+<div id="meals-stats-block">
+    {% if meal_stats %}
+    <div class="stats">
+        <div class="stat-card"><div class="stat-number">{{ meal_stats.total_classes }}</div><div class="stat-label">Классов подано</div></div>
+        <div class="stat-card"><div class="stat-number">{{ meal_stats.total_meals }}</div><div class="stat-label">Всего порций</div></div>
+        <div class="stat-card"><div class="stat-number">{{ meal_stats.paid }}</div><div class="stat-label">Платно</div></div>
+        <div class="stat-card"><div class="stat-number">{{ meal_stats.free }}</div><div class="stat-label">Бесплатно</div></div>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card" id="meals-table-container">
+    {% if meal_stats %}
+    {% set primary_rows = [] %}
+    {% set senior_rows = [] %}
+    {% for row in meals_data %}
+        {% if row.grade and 1 <= row.grade <= 4 %}
+            {% set _ = primary_rows.append(row) %}
+        {% else %}
+            {% set _ = senior_rows.append(row) %}
+        {% endif %}
+    {% endfor %}
+
+    <table class="data-table">
+        <thead>
+            <tr><th>Класс</th><th>Заявка</th><th>Всего</th><th>Платно</th><th>Бесплатно</th><th>Учитель</th></tr>
+        </thead>
+        <tbody>
+            {% if primary_rows %}
+            <tr><td colspan="6" style="color:var(--text-muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;padding-top:16px;">🟢 1–4 классы</td></tr>
+            {% for row in primary_rows %}
+            <tr class="meal-class-row" data-class-id="{{ row.class_id }}" data-has-request="{{ 'true' if row.has_request else 'false' }}" style="cursor:pointer">
+                <td><strong>{{ row.class_name }}</strong></td>
+                <td>{% if row.has_request %}<span class="badge badge-success">✓</span>{% else %}<span class="badge badge-danger">✗</span>{% endif %}</td>
+                <td>{{ row.total if row.has_request else '—' }}</td>
+                <td>{{ row.paid if row.has_request else '—' }}</td>
+                <td>{{ row.free if row.has_request else '—' }}</td>
+                <td>{{ row.teacher if row.has_request else '—' }}</td>
+            </tr>
+            {% endfor %}
+            {% endif %}
+
+            {% if senior_rows %}
+            <tr><td colspan="6" style="color:var(--text-muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;padding-top:16px;">🔵 5–11 классы</td></tr>
+            {% for row in senior_rows %}
+            <tr class="meal-class-row" data-class-id="{{ row.class_id }}" data-has-request="{{ 'true' if row.has_request else 'false' }}" style="cursor:pointer">
+                <td><strong>{{ row.class_name }}</strong></td>
+                <td>{% if row.has_request %}<span class="badge badge-success">✓</span>{% else %}<span class="badge badge-danger">✗</span>{% endif %}</td>
+                <td>{{ row.total if row.has_request else '—' }}</td>
+                <td>{{ row.paid if row.has_request else '—' }}</td>
+                <td>{{ row.free if row.has_request else '—' }}</td>
+                <td>{{ row.teacher if row.has_request else '—' }}</td>
+            </tr>
+            {% endfor %}
+            {% endif %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty">Нет поданных заявок за эту дату</div>
+    {% endif %}
+</div>
+
+<div id="meal-detail-container" style="display:none; margin-top:20px;">
+    <div class="card">
+        <h3 class="card-title">Детализация</h3>
+        <table class="data-table" id="meal-detail-table">
+            <thead><tr><th>Ученик</th><th>Тип</th><th>Ест</th></tr></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce }}">
+    function bindMealRowEvents() {
+        document.querySelectorAll('.meal-class-row').forEach(row => {
+            row.addEventListener('click', async () => {
+                const classId = row.dataset.classId;
+                const hasRequest = row.dataset.hasRequest === 'true';
+                const detailContainer = document.getElementById('meal-detail-container');
+                const detailBody = document.getElementById('meal-detail-table').querySelector('tbody');
+
+                if (detailContainer.style.display === 'block' && detailContainer.dataset.currentClass === classId) {
+                    detailContainer.style.display = 'none';
+                    return;
+                }
+
+                detailContainer.style.display = 'block';
+                detailContainer.dataset.currentClass = classId;
+
+                if (!hasRequest) {
+                    detailBody.innerHTML = '<tr><td colspan="3" class="empty">Заявка не подана</td></tr>';
+                    return;
+                }
+
+                detailBody.innerHTML = '<tr><td colspan="3" class="empty">Загрузка…</td></tr>';
+
+                try {
+                    const params = new URLSearchParams(window.location.search);
+                    const dateStr = params.get('date') || new Date().toISOString().slice(0,10);
+                    const resp = await fetch(`/api/meals/class?class_id=${classId}&date=${dateStr}`);
+                    const students = await resp.json();
+                    if (students.length === 0) {
+                        detailBody.innerHTML = '<tr><td colspan="3" class="empty">Нет данных</td></tr>';
+                    } else {
+                        detailBody.innerHTML = students.map(s => {
+                            const typeEmoji = s.meal_type === 'paid' ? '💰' : '🆓';
+                            const typeLabel = s.meal_type === 'paid' ? 'платно' : 'бесплатно';
+                            const eatingIcon = s.is_eating ? '✅' : '❌';
+                            return `<tr><td>${escapeHtml(s.name)}</td><td>${typeEmoji} ${typeLabel}</td><td>${eatingIcon}</td></tr>`;
+                        }).join('');
+                    }
+                } catch (err) {
+                    detailBody.innerHTML = '<tr><td colspan="3" class="empty">Ошибка загрузки</td></tr>';
+                }
+            });
+        });
+    }
+
+    bindMealRowEvents();
+
+    const mealsSource = new EventSource('/stream?token={{ sse_token }}');
+    window.addEventListener('pagehide', () => mealsSource.close());
+    ['meals_update', 'school_switch'].forEach(evt => {
+        mealsSource.addEventListener(evt, async () => {
+            try {
+                const params = new URLSearchParams(window.location.search);
+                const dateStr = params.get('date') || new Date().toISOString().slice(0,10);
+                const resp = await fetch(`/api/meals?date=${dateStr}`);
+                const json = await resp.json();
+                updateMealsTable(json);
+            } catch(err) {
+                console.error('Не удалось обновить питание', err);
+            }
+        });
+    });
+
+    function updateMealsTable(json) {
+        const statsContainer = document.getElementById('meals-stats-block');
+        const tableContainer = document.getElementById('meals-table-container');
+
+        if (json.stats) {
+            statsContainer.innerHTML = `
+                <div class="stats">
+                    <div class="stat-card"><div class="stat-number">${json.stats.total_classes}</div><div class="stat-label">Классов подано</div></div>
+                    <div class="stat-card"><div class="stat-number">${json.stats.total_meals}</div><div class="stat-label">Всего порций</div></div>
+                    <div class="stat-card"><div class="stat-number">${json.stats.paid}</div><div class="stat-label">Платно</div></div>
+                    <div class="stat-card"><div class="stat-number">${json.stats.free}</div><div class="stat-label">Бесплатно</div></div>
+                </div>`;
+        } else {
+            statsContainer.innerHTML = '';
+        }
+
+        if (!json.stats) {
+            tableContainer.innerHTML = '<div class="empty">Нет поданных заявок за эту дату</div>';
+            return;
+        }
+
+        const primary = json.data.filter(r => r.grade != null && 1 <= r.grade && r.grade <= 4);
+        const senior  = json.data.filter(r => !(r.grade != null && 1 <= r.grade && r.grade <= 4));
+
+        const rowHtml = (row) => {
+            const hr = row.has_request;
+            const checkHtml = hr ? '<span class="badge badge-success">✓</span>' : '<span class="badge badge-danger">✗</span>';
+            return `<tr class="meal-class-row" data-class-id="${row.class_id}" data-has-request="${hr}" style="cursor:pointer">
+                <td><strong>${escapeHtml(row.class_name)}</strong></td>
+                <td>${checkHtml}</td>
+                <td>${hr ? row.total : '—'}</td>
+                <td>${hr ? row.paid : '—'}</td>
+                <td>${hr ? row.free : '—'}</td>
+                <td>${hr ? escapeHtml(row.teacher) : '—'}</td>
+            </tr>`;
+        };
+        const sectionHeader = (text) =>
+            `<tr><td colspan="6" style="color:var(--text-muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;padding-top:16px;">${text}</td></tr>`;
+
+        let html = `<table class="data-table">
+            <thead><tr><th>Класс</th><th>Заявка</th><th>Всего</th><th>Платно</th><th>Бесплатно</th><th>Учитель</th></tr></thead>
+            <tbody>`;
+        if (primary.length > 0) {
+            html += sectionHeader('🟢 1–4 классы');
+            primary.forEach(row => { html += rowHtml(row); });
+        }
+        if (senior.length > 0) {
+            html += sectionHeader('🔵 5–11 классы');
+            senior.forEach(row => { html += rowHtml(row); });
+        }
+        html += '</tbody></table>';
+        tableContainer.innerHTML = html;
+        bindMealRowEvents();
+    }
+</script>
+{% endblock %}

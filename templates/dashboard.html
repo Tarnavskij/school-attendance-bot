@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block title %}Сводка{% endblock %}
+{% block page_title %}📊 Сводка посещаемости{% endblock %}
+
+{% block content %}
+<div class="card">
+    <div class="toolbar">
+        <form method="get" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+            <label class="form-label" for="dateInput">Дата:</label>
+            <input type="date" id="dateInput" name="date" value="{{ date }}">
+            <button type="submit" class="btn btn-primary">Показать</button>
+        </form>
+        <a href="/download_excel?date={{ date }}" class="btn btn-success">📥 Excel</a>
+    </div>
+</div>
+
+<div id="stats-block">
+    {% if stats %}
+    <div class="stats">
+        <div class="stat-card">
+            <div class="stat-number">{{ stats.total }}</div>
+            <div class="stat-label">Перекличек</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">{{ stats.absent }}</div>
+            <div class="stat-label">Отсутствуют</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number">{{ stats.classes }}</div>
+            <div class="stat-label">Классов</div>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card" id="summary-table-container">
+    {% if data %}
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Учитель</th>
+                <th>Класс</th>
+                <th>Отсутствуют (причина)</th>
+                <th>Время</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for row in data %}
+            <tr>
+                <td>{{ row.teacher }}</td>
+                <td>{{ row.class }}</td>
+                <td style="white-space:pre-line">{{ row.absent }}</td>
+                <td style="color:var(--text-muted)">{{ row.time }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty">Нет данных за эту дату</div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce }}">
+    const summarySource = new EventSource('/stream?token={{ sse_token }}');
+    window.addEventListener('pagehide', () => summarySource.close());
+    summarySource.addEventListener('summary_update', async () => {
+        try {
+            const params = new URLSearchParams(window.location.search);
+            const dateStr = params.get('date') || new Date().toISOString().slice(0,10);
+            const resp = await fetch(`/api/summary?date=${dateStr}`);
+            const json = await resp.json();
+            updateSummary(json);
+        } catch (err) {
+            console.error('Не удалось обновить сводку', err);
+        }
+    });
+
+    function updateSummary(json) {
+        const statsContainer = document.getElementById('stats-block');
+        const tableContainer = document.getElementById('summary-table-container');
+
+        if (json.stats) {
+            statsContainer.innerHTML = `
+                <div class="stats">
+                    <div class="stat-card"><div class="stat-number">${json.stats.total}</div><div class="stat-label">Перекличек</div></div>
+                    <div class="stat-card"><div class="stat-number">${json.stats.absent}</div><div class="stat-label">Отсутствуют</div></div>
+                    <div class="stat-card"><div class="stat-number">${json.stats.classes}</div><div class="stat-label">Классов</div></div>
+                </div>`;
+        } else {
+            statsContainer.innerHTML = '';
+        }
+
+        if (json.data && json.data.length > 0) {
+            const rows = json.data.map(row => `<tr>
+                <td>${escapeHtml(row.teacher)}</td>
+                <td>${escapeHtml(row.class)}</td>
+                <td style="white-space:pre-line">${escapeHtml(row.absent)}</td>
+                <td style="color:var(--text-muted)">${escapeHtml(row.time)}</td>
+            </tr>`).join('');
+
+            tableContainer.innerHTML = `<table class="data-table">
+                <thead><tr><th>Учитель</th><th>Класс</th><th>Отсутствуют (причина)</th><th>Время</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+        } else {
+            tableContainer.innerHTML = '<div class="empty">Нет данных за эту дату</div>';
+        }
+    }
+</script>
+{% endblock %}

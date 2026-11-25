@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+
+{% block title %}Заявки{% endblock %}
+{% block page_title %}📩 Заявки на доступ{% endblock %}
+
+{% block content %}
+<div class="card" id="requests-table-container">
+    {% if requests %}
+    <h3 class="card-title">⏳ Ожидают решения</h3>
+    <table class="data-table">
+        <thead>
+            <tr>
+                <th>Имя</th><th>Telegram ID</th><th>Роль</th><th>Класс</th><th>Статус</th><th>Действия</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in requests %}
+            <tr>
+                <td><strong>{{ r.name }}</strong></td>
+                <td style="font-family:monospace;color:var(--text-muted)">{{ r.telegram_id }}</td>
+                <td>{{ r.role_label }}</td>
+                <td>{{ r.class_name or '—' }}</td>
+                <td>
+                    {% if r.already_exists %}
+                    <span class="badge badge-warning">⚠️ Уже в системе</span>
+                    {% else %}
+                    <span class="badge badge-info">⏳ Ожидает</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if r.already_exists %}
+                    <span style="color:var(--text-soft);font-size:13px;margin-right:6px">Уже существует</span>
+                    <form method="post" action="/requests/{{ r.id }}/reject" style="display:inline">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn btn-danger btn-sm">❌ Отклонить</button>
+                    </form>
+                    {% else %}
+                    <form method="post" action="/requests/{{ r.id }}/approve" style="display:inline">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn btn-success btn-sm">✅ Одобрить</button>
+                    </form>
+                    <form method="post" action="/requests/{{ r.id }}/reject" style="display:inline;margin-left:6px">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button type="submit" class="btn btn-danger btn-sm">❌ Отклонить</button>
+                    </form>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty">Новых заявок нет</div>
+    {% endif %}
+</div>
+
+<div class="card" id="teachers-by-role-container">
+    {% if teachers_by_role and (teachers_by_role.director or teachers_by_role.class_teacher or teachers_by_role.subject_teacher or teachers_by_role.chef or teachers_by_role.secretary) %}
+    <h3 class="card-title">👥 Пользователи в системе</h3>
+    <table class="data-table">
+        <thead><tr><th>Имя</th><th>Класс</th></tr></thead>
+        <tbody>
+            {% if teachers_by_role.director %}
+            <tr><td colspan="2" style="color:var(--text-muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;padding-top:16px;">📋 Директор</td></tr>
+            {% for t in teachers_by_role.director %}
+            <tr><td>{{ t.name }}</td><td>—</td></tr>
+            {% endfor %}
+            {% endif %}
+
+            {% if teachers_by_role.class_teacher %}
+            <tr><td colspan="2" style="color:var(--text-muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;padding-top:16px;">👨‍🏫 Классные руководители</td></tr>
+            {% for t in teachers_by_role.class_teacher %}
+            <tr><td>{{ t.name }}</td><td>{{ t.class_name or '—' }}</td></tr>
+            {% endfor %}
+            {% endif %}
+
+            {% if teachers_by_role.subject_teacher %}
+            <tr><td colspan="2" style="color:var(--text-muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;padding-top:16px;">🧑‍🏫 Учителя-предметники</td></tr>
+            {% for t in teachers_by_role.subject_teacher %}
+            <tr><td>{{ t.name }}</td><td>—</td></tr>
+            {% endfor %}
+            {% endif %}
+
+            {% if teachers_by_role.chef %}
+            <tr><td colspan="2" style="color:var(--text-muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;padding-top:16px;">🍳 Шеф-повар</td></tr>
+            {% for t in teachers_by_role.chef %}
+            <tr><td>{{ t.name }}</td><td>—</td></tr>
+            {% endfor %}
+            {% endif %}
+
+            {% if teachers_by_role.secretary %}
+            <tr><td colspan="2" style="color:var(--text-muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;padding-top:16px;">🗂 Секретарь</td></tr>
+            {% for t in teachers_by_role.secretary %}
+            <tr><td>{{ t.name }}</td><td>—</td></tr>
+            {% endfor %}
+            {% endif %}
+        </tbody>
+    </table>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ csp_nonce }}">
+    const CSRF_TOKEN = "{{ csrf_token() }}";
+
+    const reqSource = new EventSource('/stream?token={{ sse_token }}');
+    window.addEventListener('pagehide', () => reqSource.close());
+    reqSource.addEventListener('requests_update', async () => {
+        try {
+            const resp = await fetch('/api/requests');
+            const json = await resp.json();
+            updateRequests(json);
+        } catch (err) {
+            console.error('Не удалось обновить заявки', err);
+        }
+    });
+
+    function renderPendingTable(pending) {
+        if (!pending || pending.length === 0) {
+            return '<div class="empty">Новых заявок нет</div>';
+        }
+        const rows = pending.map(r => {
+            const statusHtml = r.already_exists
+                ? '<span class="badge badge-warning">⚠️ Уже в системе</span>'
+                : '<span class="badge badge-info">⏳ Ожидает</span>';
+            const actionsHtml = r.already_exists
+                ? `<span style="color:var(--text-soft);font-size:13px;margin-right:6px">Уже существует</span>
+                   <form method="post" action="/requests/${r.id}/reject" style="display:inline">
+                     <input type="hidden" name="csrf_token" value="${CSRF_TOKEN}">
+                     <button type="submit" class="btn btn-danger btn-sm">❌ Отклонить</button>
+                   </form>`
+                : `<form method="post" action="/requests/${r.id}/approve" style="display:inline">
+                     <input type="hidden" name="csrf_token" value="${CSRF_TOKEN}">
+                     <button type="submit" class="btn btn-success btn-sm">✅ Одобрить</button>
+                   </form>
+                   <form method="post" action="/requests/${r.id}/reject" style="display:inline;margin-left:6px">
+                     <input type="hidden" name="csrf_token" value="${CSRF_TOKEN}">
+                     <button type="submit" class="btn btn-danger btn-sm">❌ Отклонить</button>
+                   </form>`;
+            return `<tr>
+                <td><strong>${escapeHtml(r.name)}</strong></td>
+                <td style="font-family:monospace;color:var(--text-muted)">${escapeHtml(r.telegram_id)}</td>
+                <td>${escapeHtml(r.role_label)}</td>
+                <td>${escapeHtml(r.class_name || '—')}</td>
+                <td>${statusHtml}</td>
+                <td>${actionsHtml}</td>
+            </tr>`;
+        }).join('');
+
+        return `<h3 class="card-title">⏳ Ожидают решения</h3>
+            <table class="data-table">
+                <thead><tr><th>Имя</th><th>Telegram ID</th><th>Роль</th><th>Класс</th><th>Статус</th><th>Действия</th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+    }
+
+    function renderTeachersByRole(tbr) {
+        if (!tbr) return '';
+        const has = tbr.director.length || tbr.class_teacher.length || tbr.subject_teacher.length || tbr.chef.length || tbr.secretary.length;
+        if (!has) return '';
+
+        const sectionHeader = (text) =>
+            `<tr><td colspan="2" style="color:var(--text-muted);font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;padding-top:16px;">${text}</td></tr>`;
+
+        let html = '<h3 class="card-title">👥 Пользователи в системе</h3><table class="data-table"><thead><tr><th>Имя</th><th>Класс</th></tr></thead><tbody>';
+        if (tbr.director.length) {
+            html += sectionHeader('📋 Директор');
+            tbr.director.forEach(t => { html += `<tr><td>${escapeHtml(t.name)}</td><td>—</td></tr>`; });
+        }
+        if (tbr.class_teacher.length) {
+            html += sectionHeader('👨‍🏫 Классные руководители');
+            tbr.class_teacher.forEach(t => { html += `<tr><td>${escapeHtml(t.name)}</td><td>${escapeHtml(t.class_name || '—')}</td></tr>`; });
+        }
+        if (tbr.subject_teacher.length) {
+            html += sectionHeader('🧑‍🏫 Учителя-предметники');
+            tbr.subject_teacher.forEach(t => { html += `<tr><td>${escapeHtml(t.name)}</td><td>—</td></tr>`; });
+        }
+        if (tbr.chef.length) {
+            html += sectionHeader('🍳 Шеф-повар');
+            tbr.chef.forEach(t => { html += `<tr><td>${escapeHtml(t.name)}</td><td>—</td></tr>`; });
+        }
+        if (tbr.secretary.length) {
+            html += sectionHeader('🗂 Секретарь');
+            tbr.secretary.forEach(t => { html += `<tr><td>${escapeHtml(t.name)}</td><td>—</td></tr>`; });
+        }
+        html += '</tbody></table>';
+        return html;
+    }
+
+    function updateRequests(json) {
+        document.getElementById('requests-table-container').innerHTML = renderPendingTable(json.pending);
+        document.getElementById('teachers-by-role-container').innerHTML = renderTeachersByRole(json.teachers_by_role);
+    }
+</script>
+{% endblock %}

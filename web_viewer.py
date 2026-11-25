@@ -353,7 +353,7 @@ def index():
     } if raw_sessions else None
     sse_token = _generate_sse_token()
     return render_template(
-        "index.html", page="summary", data=rows,
+        "dashboard.html", active_page="summary", data=rows,
         date=date_str, stats=stats,
         pending_count=_pending_count(school_id),
         current_school_id=school_id,
@@ -403,7 +403,7 @@ def requests_page():
     teachers_by_role = _load_teachers_by_role(school_id)
     sse_token = _generate_sse_token()
     return render_template(
-        "index.html", page="requests",
+        "requests.html", active_page="requests",
         requests=result,
         teachers_by_role=teachers_by_role,
         pending_count=_pending_count(school_id),
@@ -695,7 +695,7 @@ def meals_page():
     rows, stats = _load_meal_data(date_str, school_id)
     sse_token = _generate_sse_token()
     return render_template(
-        "index.html", page="meals",
+        "meals.html", active_page="meals",
         meals_data=rows, meal_stats=stats,
         date=date_str,
         pending_count=_pending_count(school_id),
@@ -714,7 +714,7 @@ def meals_coverage_list():
     school_name = get_school_name(school_id)
     months = get_meal_coverage_months(school_id)
     return render_template(
-        "index.html", page="coverage_list",
+        "coverage_list.html", active_page="coverage_list",
         months=months,
         pending_count=_pending_count(school_id),
         current_school_id=school_id,
@@ -732,7 +732,7 @@ def meals_coverage_detail(year: int, month: int):
     school_name = get_school_name(school_id)
     data = get_meal_coverage(year, month, school_id)
     return render_template(
-        "index.html", page="coverage_detail",
+        "coverage_detail.html", active_page="coverage_detail",
         coverage=data,
         pending_count=_pending_count(school_id),
         current_school_id=school_id,
@@ -850,6 +850,12 @@ def attendance_page():
         sse_token=sse_token,
         today=today
     )
+
+@app.route("/reports")
+@require_auth
+def reports_page():
+    """Заглушка. Полноценный раздел — на следующем шаге."""
+    return "Раздел «Отчёты» в разработке", 200
 
 
 # ── SSE и внутренний publish ──────────────────────────────────────────────────

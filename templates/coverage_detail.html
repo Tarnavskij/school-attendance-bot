@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}Охват питания — {{ coverage.label }}{% endblock %}
+{% block page_title %}📊 Охват питания — {{ coverage.label }}{% endblock %}
+
+{% block content %}
+<div class="card">
+    <h3 class="card-title" style="color:var(--success)">🟢 1–4 классы</h3>
+    {% if coverage.primary.days == 0 %}
+        <div class="empty">Нет перекличек за этот месяц</div>
+    {% else %}
+        <div class="stats" style="grid-template-columns:repeat(3, 1fr);">
+            <div class="stat-card"><div class="stat-number">{{ coverage.primary.days }}</div><div class="stat-label">Учебных дней</div></div>
+            <div class="stat-card"><div class="stat-number">{{ coverage.primary.absences }}</div><div class="stat-label">Всего отсутствий</div></div>
+            <div class="stat-card"><div class="stat-number">{{ "%.1f"|format(coverage.primary.coefficient)|replace(".", ",") }}</div><div class="stat-label">Учеников в день</div></div>
+        </div>
+        <div style="text-align:center;margin-top:20px;font-size:18px;font-weight:600;">
+            Среднее значение:
+            <span style="color:var(--success)">
+                {{ "%.1f"|format(coverage.primary.coefficient)|replace(".", ",") }} ученика в день
+            </span>
+        </div>
+        <div style="text-align:center;margin-top:6px;font-size:13px;color:var(--text-soft);">
+            {{ coverage.primary.absences }} отсутствий за {{ coverage.primary.days }} учебных дней
+        </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h3 class="card-title" style="color:var(--info)">🔵 5–11 классы</h3>
+    {% if coverage.senior.days == 0 %}
+        <div class="empty">Нет перекличек за этот месяц</div>
+    {% else %}
+        <div class="stats" style="grid-template-columns:repeat(3, 1fr);">
+            <div class="stat-card"><div class="stat-number">{{ coverage.senior.days }}</div><div class="stat-label">Учебных дней</div></div>
+            <div class="stat-card"><div class="stat-number">{{ coverage.senior.absences }}</div><div class="stat-label">Всего отсутствий</div></div>
+            <div class="stat-card"><div class="stat-number">{{ "%.1f"|format(coverage.senior.coefficient)|replace(".", ",") }}</div><div class="stat-label">Учеников в день</div></div>
+        </div>
+        <div style="text-align:center;margin-top:20px;font-size:18px;font-weight:600;">
+            Среднее значение:
+            <span style="color:var(--info)">
+                {{ "%.1f"|format(coverage.senior.coefficient)|replace(".", ",") }} ученика в день
+            </span>
+        </div>
+        <div style="text-align:center;margin-top:6px;font-size:13px;color:var(--text-soft);">
+            {{ coverage.senior.absences }} отсутствий за {{ coverage.senior.days }} учебных дней
+        </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <div class="toolbar">
+        <a href="/meals/coverage" class="btn btn-ghost btn-sm">← К списку месяцев</a>
+        <a href="/meals" class="btn btn-ghost btn-sm">🍽️ К питанию</a>
+    </div>
+</div>
+{% endblock %}
