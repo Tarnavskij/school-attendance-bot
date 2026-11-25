@@ -1,6 +1,8 @@
 # handlers/my_class.py
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile,
+)
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from datetime import date
@@ -19,12 +21,14 @@ from repositories import (
     update_session_records,
     get_class_analytics,
     get_class_quarters_with_data,
+    get_absences_export_data,
     get_session_records,
     delete_session,
 )
 from core.keyboards import (
-    BTN_MY_CLASS, BTN_ANALYTICS, build_menu_keyboard, back_to_menu_btn,
+    BTN_MY_CLASS, BTN_ANALYTICS, BTN_CLASS_REPORT, build_menu_keyboard, back_to_menu_btn,
 )
+from helpers.excel_export import generate_absences_excel
 from core.roles import check_access, is_admin, Role
 from core.constants import ABSENCE_REASONS
 from core.school_context import get_school_id_for_admin
@@ -537,6 +541,112 @@ async def analytics_students(callback: CallbackQuery) -> None:
         callback.message, teacher.class_id, teacher.school_id, quarter, edit=True,
     )
     await callback.answer()
+
+
+# ── Отчёт за четверть в Excel (только свой класс) ──────────────────────────
+#
+# Класс никогда не берётся из callback_data: он читается из БД по telegram_id.
+# Поэтому подменить class_id в кнопке и выгрузить чужой класс нельзя — в
+# отличие от директора/секретаря, которым класс выбирать положено.
+
+@my_class_router.message(F.text == BTN_CLASS_REPORT)
+async def class_report_quarters(message: Message, state: FSMContext) -> None:
+    await reset_screen(message.bot, message.chat.id, state)
+
+    user_id = message.from_user.id
+    if not check_access(user_id, [Role.CLASS_TEACHER]):
+        await message.answer("У вас нет закреплённого класса.")
+        return
+
+    if is_admin(user_id):
+        await message.answer(
+            "Отчёт за четверть — для классного руководителя.\n"
+            "Выгрузка по любому классу доступна в «📥 Экспорт пропусков»."
+        )
+        return
+
+    teacher = get_teacher_by_telegram_id(user_id)
+    if not teacher or not teacher.class_id:
+        await message.answer("У вас не указан класс. Обратитесь к администратору.")
+        return
+
+    # те же четверти, что у директора и секретаря: начавшиеся и закончившиеся
+    quarters = get_available_quarters(date.today())
+    if not quarters:
+        sent = await message.answer("📥 Отчёт за четверть\n\nУчебный год ещё не начался.")
+        await set_screen(state, sent.message_id)
+        return
+
+    buttons = [
+        [InlineKeyboardButton(
+            text=q["short_label"],
+            callback_data=f"cr:q:{q['date_from'].isoformat()}:{q['date_to'].isoformat()}",
+        )]
+        for q in quarters
+    ]
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons + [[back_to_menu_btn()]])
+    sent = await message.answer("📥 Выберите четверть:", reply_markup=kb)
+    await set_screen(state, sent.message_id)
+
+
+@my_class_router.callback_query(F.data.startswith("cr:q:"))
+async def class_report_send(callback: CallbackQuery) -> None:
+    user_id = callback.from_user.id
+    if not check_access(user_id, [Role.CLASS_TEACHER]):
+        await callback.answer("Нет доступа.", show_alert=True)
+        return
+    if is_admin(user_id):
+        await callback.answer("Только для классных руководителей.", show_alert=True)
+        return
+
+    teacher = get_teacher_by_telegram_id(user_id)
+    if not teacher or not teacher.class_id:
+        await callback.answer("У вас нет класса.", show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+    try:
+        d_from = date.fromisoformat(parts[2])
+    except (IndexError, ValueError):
+        await callback.answer("Ошибка данных.", show_alert=True)
+        return
+
+    # Сверяемся с серверным списком четвертей и берём период из него,
+    # а не из callback_data — иначе период можно расширить правкой кнопки.
+    quarter = next(
+        (q for q in get_available_quarters(date.today()) if q["date_from"] == d_from),
+        None,
+    )
+    if not quarter:
+        await callback.answer("Четверть не найдена.", show_alert=True)
+        return
+
+    await callback.answer()
+    await callback.message.edit_text(f"⏳ Формирую отчёт за {quarter['short_label']}...")
+
+    data = get_absences_export_data(
+        teacher.school_id,
+        teacher.class_id,
+        quarter["date_from"],
+        quarter["date_to"],
+    )
+    if not data:
+        await callback.message.edit_text("❌ Нет данных за эту четверть.")
+        return
+
+    class_name = teacher.class_name or "класс"
+    title_info = f"{quarter['short_label']} — {class_name}"
+    file_bytes = generate_absences_excel(data, title_info=title_info)
+
+    # «1-я четверть — 7А» -> «1-я_четверть_7А.xlsx»
+    safe_filename = "_".join(title_info.replace("—", " ").split())
+    filename = f"absences_{safe_filename}.xlsx"
+
+    await callback.message.edit_text("✅ Отчёт сформирован!")
+    await callback.message.answer_document(
+        BufferedInputFile(file_bytes, filename=filename),
+        caption=f"📥 Отчёт по пропускам: {title_info}",
+    )
 
 
 # ── Редактор переклички (для классного руководителя и админа) ──────────────
