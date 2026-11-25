@@ -12,7 +12,8 @@ def generate_absences_excel(data: dict, title_info: str = "Все классы")
     # Заголовок отчета
     ws.cell(row=1, column=1, value=f"Отчет по пропускам: {title_info}").font = Font(bold=True, size=12)
 
-    headers = ["Класс", "ФИО", "Всего", "По болезни", "На оздоровлении", "По заявлению", "Без уважительной"]
+    headers = ["Класс", "ФИО", "Всего", "По болезни", "На оздоровлении",
+               "По заявлению", "По приказу", "Без уважительной"]
 
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=3, column=col, value=h)
@@ -28,7 +29,8 @@ def generate_absences_excel(data: dict, title_info: str = "Все классы")
             ws.cell(row=row_num, column=4, value=s["sick"])
             ws.cell(row=row_num, column=5, value=s["recuperation"])
             ws.cell(row=row_num, column=6, value=s["statement"])
-            ws.cell(row=row_num, column=7, value=s["unexcused"])
+            ws.cell(row=row_num, column=7, value=s["order"])
+            ws.cell(row=row_num, column=8, value=s["unexcused"])
             row_num += 1
 
     for col in ws.columns:

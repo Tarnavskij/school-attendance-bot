@@ -1028,12 +1028,10 @@ def get_class_meal_summary(class_id: int, school_id: int,
 
 def get_absences_export_data(school_id: int, class_id: int = None, date_from: date = None,
                              date_to: date = None) -> dict:
-    from core.constants import ABSENCE_REASONS, DEFAULT_ABSENCE_REASON
-
-    sick_str = ABSENCE_REASONS[0]
-    statement_str = ABSENCE_REASONS[1]
-    recuperation_str = ABSENCE_REASONS[2]
-    unexcused_str = ABSENCE_REASONS[3]
+    from core.constants import (
+        REASON_ORDER, REASON_RECUPERATION, REASON_SICK,
+        REASON_STATEMENT, REASON_UNEXCUSED,
+    )
 
     with get_db() as db:
         q_classes = db.query(Class).filter(Class.school_id == school_id)
@@ -1064,17 +1062,19 @@ def get_absences_export_data(school_id: int, class_id: int = None, date_from: da
                 absent_records = [r for r in records if not r.is_present]
                 total = len(absent_records)
 
-                sick = sum(1 for r in absent_records if r.reason == sick_str)
-                statement = sum(1 for r in absent_records if r.reason == statement_str)
-                recuperation = sum(1 for r in absent_records if r.reason == recuperation_str)
+                sick = sum(1 for r in absent_records if r.reason == REASON_SICK)
+                statement = sum(1 for r in absent_records if r.reason == REASON_STATEMENT)
+                order = sum(1 for r in absent_records if r.reason == REASON_ORDER)
+                recuperation = sum(1 for r in absent_records if r.reason == REASON_RECUPERATION)
                 unexcused = sum(1 for r in absent_records if
-                                r.reason == unexcused_str or r.reason is None or r.reason == DEFAULT_ABSENCE_REASON)
+                                r.reason == REASON_UNEXCUSED or r.reason is None)
 
                 class_data.append({
                     "name": student.name,
                     "total": total,
                     "sick": sick,
                     "statement": statement,
+                    "order": order,
                     "recuperation": recuperation,
                     "unexcused": unexcused,
                 })
