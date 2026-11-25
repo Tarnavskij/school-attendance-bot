@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Перекличка{% endblock %} — Панель управления</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/admin.css') }}">
+    {% block head %}{% endblock %}
+</head>
+<body class="{% block body_class %}{% endblock %}">
+
+<div class="app">
+
+    <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <span class="sidebar-logo">🏫</span>
+            <span class="sidebar-title">Перекличка</span>
+        </div>
+
+        <nav class="sidebar-nav">
+            <a href="/" class="nav-item {% if active_page == 'summary' %}active{% endif %}" title="Сводка">
+                <span class="nav-icon">📊</span>
+                <span class="nav-label">Сводка</span>
+            </a>
+            <a href="/requests" class="nav-item {% if active_page == 'requests' %}active{% endif %}" title="Заявки">
+                <span class="nav-icon">📩</span>
+                <span class="nav-label">Заявки</span>
+                {% if pending_count and pending_count > 0 %}
+                <span class="nav-badge">{{ pending_count }}</span>
+                {% endif %}
+            </a>
+            <a href="/meals" class="nav-item {% if active_page in ['meals','coverage_list','coverage_detail'] %}active{% endif %}" title="Питание">
+                <span class="nav-icon">🍽️</span>
+                <span class="nav-label">Питание</span>
+            </a>
+            <a href="/attendance" class="nav-item {% if active_page == 'attendance' %}active{% endif %}" title="График">
+                <span class="nav-icon">📅</span>
+                <span class="nav-label">График</span>
+            </a>
+            <a href="/reports" class="nav-item {% if active_page == 'reports' %}active{% endif %}" title="Отчёты">
+                <span class="nav-icon">📄</span>
+                <span class="nav-label">Отчёты</span>
+            </a>
+            <a href="/schools" class="nav-item {% if active_page in ['schools','import'] %}active{% endif %}" title="Импорт">
+                <span class="nav-icon">📥</span>
+                <span class="nav-label">Импорт</span>
+            </a>
+        </nav>
+
+        <div class="sidebar-footer">
+            <button class="btn-collapse" id="sidebarToggle" type="button" title="Свернуть/развернуть">
+                <span class="collapse-icon">◀</span>
+            </button>
+        </div>
+    </aside>
+
+    <div class="main">
+        <header class="topbar">
+            <button class="hamburger" id="hamburgerBtn" type="button" aria-label="Меню">
+                <span></span><span></span><span></span>
+            </button>
+            <h1 class="topbar-title">{% block page_title %}Панель управления{% endblock %}</h1>
+            <div class="topbar-right">
+                <span class="school-chip">🏫 {{ current_school_name }}</span>
+            </div>
+        </header>
+
+        <main class="content">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+</div>
+
+<script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/admin.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

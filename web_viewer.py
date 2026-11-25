@@ -843,7 +843,7 @@ def attendance_page():
     today = date.today().strftime('%Y-%m-%d')
     return render_template(
         "attendance.html",
-        page="attendance",
+        active_page="attendance",          # ← было page="attendance"
         pending_count=_pending_count(school_id),
         current_school_id=school_id,
         current_school_name=school_name,
