@@ -5,72 +5,91 @@
     <title>Отчёт по пропускам — {{ selected_quarter.label }}</title>
     <style>
         @page {
-            size: A4 landscape;
-            margin: 12mm 10mm;
+            size: A4 portrait;
+            margin: 8mm 6mm;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Times New Roman', Times, serif;
             color: #000;
             background: #fff;
-            font-size: 11pt;
-            line-height: 1.35;
+            font-size: 9pt;
+            line-height: 1.25;
         }
+
+        /* ── Шапка отчёта ───────────────────────────────── */
         .header {
             text-align: center;
-            margin-bottom: 14px;
+            margin-bottom: 8px;
         }
         .header .school {
-            font-size: 14pt;
+            font-size: 12pt;
             font-weight: 700;
-            margin-bottom: 4px;
-        }
-        .header .title {
-            font-size: 13pt;
             margin-bottom: 2px;
         }
-        .header .meta {
+        .header .title {
             font-size: 11pt;
+            margin-bottom: 1px;
+        }
+        .header .meta {
+            font-size: 9.5pt;
             color: #333;
         }
 
+        /* ── Таблица ────────────────────────────────────── */
         table {
             width: 100%;
             border-collapse: collapse;
-            table-layout: fixed;   /* ← ключ: фиксированные ширины */
-            font-size: 10pt;
-            margin-top: 12px;
+            table-layout: fixed;
+            font-size: 8.5pt;
+            margin-top: 6px;
         }
         th, td {
             border: 1px solid #333;
-            padding: 5px 6px;
-            text-align: left;
+            padding: 2px 3px;
+            text-align: center;
             vertical-align: middle;
             overflow-wrap: break-word;
             word-wrap: break-word;
         }
         th {
-            background: #eef2f7;
+            background: #e8eef5;
             font-weight: 700;
-            text-align: center;
-            font-size: 9.5pt;
-            line-height: 1.2;
+            font-size: 7.5pt;
+            line-height: 1.1;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
         }
-        td.num { text-align: right; white-space: nowrap; }
-        td.center { text-align: center; }
+        td.name-cell {
+            text-align: left;
+            padding-left: 4px;
+        }
+        td.class-cell {
+            text-align: left;
+            padding-left: 4px;
+            font-weight: 700;
+        }
+        td.num { text-align: center; white-space: nowrap; }
         tfoot td {
             font-weight: 700;
-            background: #f3f4f6;
+            background: #f0f0f0;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
         }
 
+        /* Запрет разрыва строки между страницами */
+        tbody tr { page-break-inside: avoid; }
+
+        /* ── Подвал ─────────────────────────────────────── */
         .footer {
-            margin-top: 20px;
-            font-size: 10pt;
-            color: #555;
+            margin-top: 12px;
+            font-size: 8.5pt;
+            color: #444;
             display: flex;
             justify-content: space-between;
         }
 
+        /* ── Тулбар (только на экране) ──────────────────── */
         .toolbar {
             position: fixed;
             top: 10px;
@@ -92,7 +111,6 @@
 
         @media print {
             .toolbar { display: none; }
-            body { font-size: 10pt; }
         }
     </style>
 </head>
@@ -114,33 +132,33 @@
 {% if rows %}
 <table>
     {% if mode == 'summary' %}
-    {# 8 колонок: Класс · Учеников · Всего · Болезнь · Оздоровление · Заявление · Приказ · Без уваж. #}
+    {# Класс · Учеников · Всего · Болезнь · Оздоровление · Заявление · Приказ · Без уваж. #}
     <colgroup>
+        <col style="width: 8%;">
         <col style="width: 9%;">
         <col style="width: 9%;">
-        <col style="width: 9%;">
+        <col style="width: 11%;">
+        <col style="width: 16%;">
         <col style="width: 13%;">
-        <col style="width: 17%;">
-        <col style="width: 15%;">
-        <col style="width: 13%;">
-        <col style="width: 15%;">
+        <col style="width: 11%;">
+        <col style="width: 23%;">
     </colgroup>
     <thead>
         <tr>
             <th>Класс</th>
-            <th>Учеников</th>
+            <th>Уче-<br>ников</th>
             <th>Всего</th>
-            <th>По болезни</th>
-            <th>На оздоровлении</th>
-            <th>По заявлению</th>
-            <th>По приказу</th>
-            <th>Без уваж.</th>
+            <th>По<br>болезни</th>
+            <th>На<br>оздоров-<br>лении</th>
+            <th>По<br>заявле-<br>нию</th>
+            <th>По<br>приказу</th>
+            <th>Без уваж.<br>причины</th>
         </tr>
     </thead>
     <tbody>
         {% for r in rows %}
         <tr>
-            <td><strong>{{ r.class_name }}</strong></td>
+            <td class="class-cell">{{ r.class_name }}</td>
             <td class="num">{{ r.students_count }}</td>
             <td class="num"><strong>{{ r.total }}</strong></td>
             <td class="num">{{ r.sick }}</td>
@@ -165,34 +183,34 @@
     </tfoot>
 
     {% else %}
-    {# 8 колонок: № · Ученик · Всего · Болезнь · Оздоровление · Заявление · Приказ · Без уваж. #}
+    {# № · Ученик · Всего · Болезнь · Оздоровление · Заявление · Приказ · Без уваж. #}
     <colgroup>
-        <col style="width: 5%;">
-        <col style="width: 31%;">
+        <col style="width: 4%;">
+        <col style="width: 34%;">
+        <col style="width: 8%;">
         <col style="width: 10%;">
-        <col style="width: 13%;">
-        <col style="width: 15%;">
-        <col style="width: 13%;">
-        <col style="width: 12%;">
+        <col style="width: 14%;">
         <col style="width: 11%;">
+        <col style="width: 10%;">
+        <col style="width: 9%;">
     </colgroup>
     <thead>
         <tr>
             <th>№</th>
-            <th>Ученик</th>
+            <th>ФИО ученика</th>
             <th>Всего</th>
-            <th>По болезни</th>
-            <th>На оздоровлении</th>
-            <th>По заявлению</th>
-            <th>По приказу</th>
-            <th>Без уваж.</th>
+            <th>По<br>болезни</th>
+            <th>На<br>оздоров-<br>лении</th>
+            <th>По<br>заявле-<br>нию</th>
+            <th>По<br>приказу</th>
+            <th>Без<br>уваж.</th>
         </tr>
     </thead>
     <tbody>
         {% for r in rows %}
         <tr>
-            <td class="center">{{ loop.index }}</td>
-            <td>{{ r.name }}</td>
+            <td class="num">{{ loop.index }}</td>
+            <td class="name-cell">{{ r.name }}</td>
             <td class="num"><strong>{{ r.total }}</strong></td>
             <td class="num">{{ r.sick }}</td>
             <td class="num">{{ r.recuperation }}</td>
@@ -204,7 +222,7 @@
     </tbody>
     <tfoot>
         <tr>
-            <td colspan="2">Итого</td>
+            <td colspan="2" style="text-align:left;padding-left:4px;">Итого по классу</td>
             <td class="num">{{ total_all }}</td>
             <td class="num">{{ total_sick }}</td>
             <td class="num">{{ total_recuperation }}</td>
