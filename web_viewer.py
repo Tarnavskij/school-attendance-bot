@@ -4,7 +4,7 @@ import functools
 import json
 import queue
 import uuid
-from datetime import date
+from datetime import date, datetime
 from flask import (
     Flask, render_template, request, send_file,
     redirect, url_for, session, Response, jsonify, g,
@@ -440,7 +440,9 @@ def schools_page():
     school_id = get_web_school_id()
     school_name = get_school_name(school_id)
     return render_template(
-        "index.html", page="schools",
+        "import.html", active_page="schools",
+        form_action=f"/schools/{school_id}/import",
+        result=None,
         pending_count=_pending_count(school_id),
         current_school_id=school_id,
         current_school_name=school_name,
@@ -495,15 +497,17 @@ def rename_school(school_id: int):
 def import_students_route(school_id: int):
     current_school_id = get_web_school_id()
     school_name = get_school_name(current_school_id)
+    form_action = f"/schools/{current_school_id}/import"
+
     if request.method == "GET":
         return render_template(
-            "index.html", page="import",
-            school_id=current_school_id, school_name=school_name,
+            "import.html", active_page="import",
+            form_action=form_action, result=None,
             pending_count=_pending_count(current_school_id),
-            all_schools=[],
             current_school_id=current_school_id,
             current_school_name=school_name,
         )
+
     file = request.files.get("file")
     if not file or not file.filename.endswith(".xlsx"):
         return "Ошибка: нужен файл .xlsx", 400
@@ -521,11 +525,9 @@ def import_students_route(school_id: int):
         except PermissionError:
             pass
     return render_template(
-        "index.html", page="import",
-        school_id=current_school_id, school_name=school_name,
-        result=result,
+        "import.html", active_page="import",
+        form_action=form_action, result=result,
         pending_count=_pending_count(current_school_id),
-        all_schools=[],
         current_school_id=current_school_id,
         current_school_name=school_name,
     )
@@ -851,11 +853,188 @@ def attendance_page():
         today=today
     )
 
+# ── Отчёты ──────────────────────────────────────────────────────────────────
+
+def _summarize_by_class(data: dict) -> list:
+    """Сворачивает {class_name: [students]} в [{class_name, students_count, total, sick, ...}]."""
+    def _class_sort_key(name):
+        digits = ''.join(filter(str.isdigit, name))
+        return (int(digits) if digits else 999, name)
+
+    result = []
+    for class_name, students in data.items():
+        result.append({
+            "class_name": class_name,
+            "students_count": len(students),
+            "total": sum(s["total"] for s in students),
+            "sick": sum(s["sick"] for s in students),
+            "statement": sum(s["statement"] for s in students),
+            "order": sum(s["order"] for s in students),
+            "recuperation": sum(s["recuperation"] for s in students),
+            "unexcused": sum(s["unexcused"] for s in students),
+        })
+    result.sort(key=lambda r: _class_sort_key(r["class_name"]))
+    return result
+
+
+def _parse_quarter_and_class():
+    """
+    Разбирает query-параметры 'quarter' (формат 'YYYY-MM-DD:YYYY-MM-DD') и 'class_id'.
+    Возвращает (selected_quarter_dict | None, class_id_int, classes_list, quarters_list, school_id, school_name).
+    """
+    from helpers.quarters import get_available_quarters
+    from repositories import get_all_classes
+
+    school_id = get_web_school_id()
+    school_name = get_school_name(school_id)
+    quarters = get_available_quarters(date.today())
+    classes = get_all_classes(school_id)
+
+    quarter_param = request.args.get("quarter", "")
+    class_id_str = request.args.get("class_id", "0")
+    try:
+        class_id = int(class_id_str)
+    except (TypeError, ValueError):
+        class_id = 0
+
+    selected_quarter = None
+    if quarter_param and ":" in quarter_param:
+        try:
+            from_str, to_str = quarter_param.split(":", 1)
+            d_from = date.fromisoformat(from_str)
+            d_to = date.fromisoformat(to_str)
+            for q in quarters:
+                if q["date_from"] == d_from and q["date_to"] == d_to:
+                    selected_quarter = q
+                    break
+        except ValueError:
+            selected_quarter = None
+
+    if selected_quarter is None and quarters:
+        selected_quarter = quarters[0]
+
+    return selected_quarter, class_id, classes, quarters, school_id, school_name
+
+
+def _build_report_data(school_id: int, class_id: int, quarter: dict):
+    """
+    Возвращает (mode, rows, selected_class_name):
+      mode='summary' — все классы, rows = сводка по классам
+      mode='detail'  — один класс,   rows = по ученикам этого класса
+    """
+    from repositories import get_absences_export_data, get_all_classes
+
+    data = get_absences_export_data(
+        school_id,
+        class_id if class_id != 0 else None,
+        quarter["date_from"],
+        quarter["date_to"],
+    )
+
+    if class_id == 0:
+        return "summary", _summarize_by_class(data), None
+
+    classes = get_all_classes(school_id)
+    class_obj = next((c for c in classes if c.id == class_id), None)
+    class_name = class_obj.name if class_obj else "?"
+    return "detail", data.get(class_name, []), class_name
+
+
 @app.route("/reports")
 @require_auth
 def reports_page():
-    """Заглушка. Полноценный раздел — на следующем шаге."""
-    return "Раздел «Отчёты» в разработке", 200
+    selected_quarter, class_id, classes, quarters, school_id, school_name = _parse_quarter_and_class()
+
+    if not selected_quarter:
+        return render_template(
+            "reports.html", active_page="reports",
+            quarters=[], classes=[], selected_quarter=None,
+            selected_class_id=0, preview_mode=None, preview_rows=None,
+            pending_count=_pending_count(school_id),
+            current_school_id=school_id,
+            current_school_name=school_name,
+        )
+
+    mode, rows, class_name = _build_report_data(school_id, class_id, selected_quarter)
+
+    return render_template(
+        "reports.html", active_page="reports",
+        quarters=quarters, classes=classes,
+        selected_quarter=selected_quarter,
+        selected_class_id=class_id,
+        selected_class_name=class_name,
+        preview_mode=mode,
+        preview_rows=rows,
+        pending_count=_pending_count(school_id),
+        current_school_id=school_id,
+        current_school_name=school_name,
+    )
+
+
+@app.route("/reports/print")
+@require_auth
+def reports_print():
+    selected_quarter, class_id, _classes, _quarters, school_id, school_name = _parse_quarter_and_class()
+
+    if not selected_quarter:
+        return "Учебный год ещё не начался", 400
+
+    mode, rows, class_name = _build_report_data(school_id, class_id, selected_quarter)
+
+    total_students = sum(r.get("students_count", 0) for r in rows) if mode == "summary" else len(rows)
+    total_all = sum(r["total"] for r in rows)
+    total_sick = sum(r["sick"] for r in rows)
+    total_recuperation = sum(r["recuperation"] for r in rows)
+    total_statement = sum(r["statement"] for r in rows)
+    total_order = sum(r["order"] for r in rows)
+    total_unexcused = sum(r["unexcused"] for r in rows)
+
+    return render_template(
+        "print_report.html",
+        school_name=school_name,
+        selected_quarter=selected_quarter,
+        selected_class_name=class_name,
+        mode=mode,
+        rows=rows,
+        now=datetime.now(),
+        total_students=total_students,
+        total_all=total_all,
+        total_sick=total_sick,
+        total_recuperation=total_recuperation,
+        total_statement=total_statement,
+        total_order=total_order,
+        total_unexcused=total_unexcused,
+    )
+
+
+@app.route("/reports/excel")
+@require_auth
+def reports_excel():
+    from helpers.excel_export import generate_absences_excel, generate_class_summary_excel
+
+    selected_quarter, class_id, _classes, _quarters, school_id, _school_name = _parse_quarter_and_class()
+
+    if not selected_quarter:
+        return "Учебный год ещё не начался", 400
+
+    mode, rows, class_name = _build_report_data(school_id, class_id, selected_quarter)
+
+    q_short = selected_quarter.get("short_label", selected_quarter["label"])
+
+    if mode == "summary":
+        title_info = f"{q_short} — Все классы"
+        file_bytes = generate_class_summary_excel(rows, title_info=title_info)
+    else:
+        title_info = f"{q_short} — {class_name}"
+        file_bytes = generate_absences_excel({class_name: rows}, title_info=title_info)
+
+    safe = "_".join(title_info.replace("—", " ").split())
+    return send_file(
+        io.BytesIO(file_bytes),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=f"absences_{safe}.xlsx",
+    )
 
 
 # ── SSE и внутренний publish ──────────────────────────────────────────────────

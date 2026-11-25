@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block title %}Импорт учеников{% endblock %}
+{% block page_title %}📥 Импорт учеников{% endblock %}
+
+{% block content %}
+
+{% if result %}
+<div class="card">
+    <h3 class="card-title">✅ Импорт завершён</h3>
+    {% if result.error %}
+    <p style="color:var(--danger);margin-bottom:8px;"><strong>Ошибка:</strong> {{ result.error }}</p>
+    {% endif %}
+    <table class="data-table" style="max-width:500px;">
+        <tbody>
+            <tr><td>Добавлено учеников</td><td><strong>{{ result.added }}</strong></td></tr>
+            <tr><td>Пропущено дубликатов</td><td>{{ result.skipped }}</td></tr>
+            <tr><td>Создано новых классов</td><td>{{ result.classes_created }}</td></tr>
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<div class="card">
+    <h3 class="card-title">📤 Загрузить Excel-файл с учениками</h3>
+    <form method="post" enctype="multipart/form-data" action="{{ form_action }}" style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="file" name="file" accept=".xlsx" required>
+        <button type="submit" class="btn btn-primary">⬆️ Загрузить и импортировать</button>
+    </form>
+    <p style="margin-top:12px;font-size:13px;color:var(--text-muted);">
+        Формат: <strong>.xlsx</strong>, поля: Фамилия, Имя, Отчество, Дата рождения, Пол, Учебный год, Параллель, Буква
+    </p>
+</div>
+
+<div class="card">
+    <h3 class="card-title">📖 Как получить файл из АСОД</h3>
+    <ol style="list-style:none;padding:0;margin:20px 0 0 0;">
+        <li style="margin-bottom:18px;display:flex;gap:16px;align-items:flex-start;">
+            <span style="background:var(--primary);color:#fff;width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0;">1</span>
+            <div><strong>Перейдите на сайт АСОД</strong><br>
+            <a href="https://asod.edu.by/Main" target="_blank" rel="noopener">https://asod.edu.by/Main</a></div>
+        </li>
+        <li style="margin-bottom:18px;display:flex;gap:16px;align-items:flex-start;">
+            <span style="background:var(--primary);color:#fff;width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0;">2</span>
+            <div><strong>Перейдите на вкладку «Учащиеся»</strong><br>
+            <span style="color:var(--text-muted);">В верхнем меню выберите раздел «Учащиеся».</span></div>
+        </li>
+        <li style="margin-bottom:18px;display:flex;gap:16px;align-items:flex-start;">
+            <span style="background:var(--primary);color:#fff;width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0;">3</span>
+            <div><strong>Выберите «Выборка по учащимся»</strong><br>
+            <span style="color:var(--text-muted);">В левом меню найдите пункт «Выборка по учащимся» и кликните.</span></div>
+        </li>
+        <li style="margin-bottom:18px;display:flex;gap:16px;align-items:flex-start;">
+            <span style="background:var(--primary);color:#fff;width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0;">4</span>
+            <div><strong>В «Свойства» отметьте «Учебный год»</strong><br>
+            <span style="color:var(--text-muted);">Поставьте галочку напротив поля «Учебный год».</span></div>
+        </li>
+        <li style="margin-bottom:18px;display:flex;gap:16px;align-items:flex-start;">
+            <span style="background:var(--primary);color:#fff;width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0;">5</span>
+            <div><strong>Настройте фильтр «Условия построения выборки»</strong><br>
+            <span style="color:var(--text-muted);">В поле «Учебный год» выберите <strong>«Равно»</strong> и укажите текущий учебный год (например, <strong>2026-2027</strong>).</span></div>
+        </li>
+        <li style="margin-bottom:18px;display:flex;gap:16px;align-items:flex-start;">
+            <span style="background:var(--primary);color:#fff;width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0;">6</span>
+            <div><strong>Нажмите «Далее»</strong><br>
+            <span style="color:var(--text-muted);">Переход к выбору полей для отчёта.</span></div>
+        </li>
+        <li style="margin-bottom:18px;display:flex;gap:16px;align-items:flex-start;">
+            <span style="background:var(--primary);color:#fff;width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0;">7</span>
+            <div><strong>Отметьте необходимые поля</strong><br>
+            <span style="color:var(--text-muted);">Поставьте галочки напротив:</span>
+            <ul style="margin:6px 0 0 20px;color:var(--text-muted);">
+                <li>✅ Первичная информация (Фамилия, Имя, Отчество, дата рождения, пол)</li>
+                <li>✅ Класс (Учебный год, параллель, буква класса)</li>
+            </ul></div>
+        </li>
+        <li style="margin-bottom:18px;display:flex;gap:16px;align-items:flex-start;">
+            <span style="background:var(--primary);color:#fff;width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0;">8</span>
+            <div><strong>Нажмите «Сформировать»</strong><br>
+            <span style="color:var(--text-muted);">Система сгенерирует отчёт.</span></div>
+        </li>
+        <li style="margin-bottom:18px;display:flex;gap:16px;align-items:flex-start;">
+            <span style="background:var(--primary);color:#fff;width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0;">9</span>
+            <div><strong>Нажмите «Экспортировать отчёт в Excel»</strong><br>
+            <span style="color:var(--text-muted);">Файл будет сохранён на вашем компьютере.</span></div>
+        </li>
+        <li style="margin-bottom:18px;display:flex;gap:16px;align-items:flex-start;">
+            <span style="background:var(--primary);color:#fff;width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0;">10</span>
+            <div><strong>Загрузите файл в панель</strong><br>
+            <span style="color:var(--text-muted);">Выше на этой странице выберите файл и нажмите «Загрузить и импортировать».</span></div>
+        </li>
+        <li style="display:flex;gap:16px;align-items:flex-start;">
+            <span style="background:var(--primary);color:#fff;width:28px;height:28px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:14px;flex-shrink:0;">11</span>
+            <div><strong>Дождитесь результатов</strong><br>
+            <span style="color:var(--text-muted);">Появится статистика: сколько добавлено, сколько пропущено.</span></div>
+        </li>
+    </ol>
+    <div style="margin-top:20px;padding:14px 18px;background:var(--info-soft);border-radius:var(--radius);border-left:4px solid var(--info);">
+        <p style="margin:0;font-size:13px;color:var(--text);">
+            💡 <strong>Важно:</strong> файл должен быть <strong>.xlsx</strong> и содержать столбцы
+            <strong>Фамилия, Имя, Отчество, Дата рождения, Пол, Учебный год, Параллель, Буква</strong>.
+            Остальные столбцы игнорируются.
+        </p>
+    </div>
+</div>
+{% endblock %}

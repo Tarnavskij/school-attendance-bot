@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <title>Отчёт по пропускам — {{ selected_quarter.label }}</title>
+    <style>
+        @page { size: A4; margin: 15mm; }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Times New Roman', Times, serif;
+            color: #000;
+            background: #fff;
+            font-size: 12pt;
+            line-height: 1.4;
+        }
+        .header { text-align: center; margin-bottom: 20px; }
+        .header .school { font-size: 14pt; font-weight: 700; margin-bottom: 6px; }
+        .header .title { font-size: 13pt; margin-bottom: 4px; }
+        .header .meta { font-size: 11pt; color: #333; }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 16px;
+            font-size: 10.5pt;
+        }
+        th, td {
+            border: 1px solid #333;
+            padding: 6px 8px;
+            text-align: left;
+        }
+        th {
+            background: #eef2f7;
+            font-weight: 700;
+            text-align: center;
+            font-size: 10pt;
+        }
+        td.num { text-align: right; }
+        td.center { text-align: center; }
+        tfoot td {
+            font-weight: 700;
+            background: #f5f5f5;
+        }
+        .footer {
+            margin-top: 30px;
+            font-size: 10pt;
+            color: #555;
+            display: flex;
+            justify-content: space-between;
+        }
+        .toolbar {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            display: flex;
+            gap: 8px;
+            z-index: 100;
+        }
+        .toolbar button {
+            padding: 8px 16px;
+            border: 1px solid #333;
+            background: #fff;
+            cursor: pointer;
+            font-size: 13px;
+            border-radius: 4px;
+        }
+        .toolbar button:hover { background: #f0f0f0; }
+        @media print {
+            .toolbar { display: none; }
+            body { font-size: 11pt; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="toolbar">
+    <button onclick="window.print()">🖨 Печать / PDF</button>
+    <button onclick="window.close()">✖ Закрыть</button>
+</div>
+
+<div class="header">
+    <div class="school">{{ school_name }}</div>
+    <div class="title">Отчёт по пропускам за {{ selected_quarter.label }}</div>
+    <div class="meta">
+        {% if mode == 'summary' %}Все классы{% else %}Класс: {{ selected_class_name }}{% endif %}
+    </div>
+</div>
+
+{% if rows %}
+<table>
+    {% if mode == 'summary' %}
+    <thead>
+        <tr>
+            <th>Класс</th>
+            <th>Учеников</th>
+            <th>Всего</th>
+            <th>По болезни</th>
+            <th>На оздоровлении</th>
+            <th>По заявлению</th>
+            <th>По приказу</th>
+            <th>Без уваж.</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for r in rows %}
+        <tr>
+            <td>{{ r.class_name }}</td>
+            <td class="num">{{ r.students_count }}</td>
+            <td class="num"><strong>{{ r.total }}</strong></td>
+            <td class="num">{{ r.sick }}</td>
+            <td class="num">{{ r.recuperation }}</td>
+            <td class="num">{{ r.statement }}</td>
+            <td class="num">{{ r.order }}</td>
+            <td class="num">{{ r.unexcused }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+    <tfoot>
+        <tr>
+            <td>Итого</td>
+            <td class="num">{{ total_students }}</td>
+            <td class="num">{{ total_all }}</td>
+            <td class="num">{{ total_sick }}</td>
+            <td class="num">{{ total_recuperation }}</td>
+            <td class="num">{{ total_statement }}</td>
+            <td class="num">{{ total_order }}</td>
+            <td class="num">{{ total_unexcused }}</td>
+        </tr>
+    </tfoot>
+    {% else %}
+    <thead>
+        <tr>
+            <th>№</th>
+            <th>Ученик</th>
+            <th>Всего</th>
+            <th>По болезни</th>
+            <th>На оздоровлении</th>
+            <th>По заявлению</th>
+            <th>По приказу</th>
+            <th>Без уваж.</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for r in rows %}
+        <tr>
+            <td class="center">{{ loop.index }}</td>
+            <td>{{ r.name }}</td>
+            <td class="num"><strong>{{ r.total }}</strong></td>
+            <td class="num">{{ r.sick }}</td>
+            <td class="num">{{ r.recuperation }}</td>
+            <td class="num">{{ r.statement }}</td>
+            <td class="num">{{ r.order }}</td>
+            <td class="num">{{ r.unexcused }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+    <tfoot>
+        <tr>
+            <td colspan="2">Итого</td>
+            <td class="num">{{ total_all }}</td>
+            <td class="num">{{ total_sick }}</td>
+            <td class="num">{{ total_recuperation }}</td>
+            <td class="num">{{ total_statement }}</td>
+            <td class="num">{{ total_order }}</td>
+            <td class="num">{{ total_unexcused }}</td>
+        </tr>
+    </tfoot>
+    {% endif %}
+</table>
+{% else %}
+<p style="text-align:center;margin-top:40px;color:#666;">Нет данных за выбранный период</p>
+{% endif %}
+
+<div class="footer">
+    <span>Дата формирования: {{ now.strftime('%d.%m.%Y %H:%M') }}</span>
+    <span>{{ school_name }}</span>
+</div>
+
+<script nonce="{{ csp_nonce }}">
+    // Автозапуск печати при загрузке (с небольшой задержкой, чтобы стили применились)
+    window.addEventListener('load', function () {
+        setTimeout(function () { window.print(); }, 300);
+    });
+</script>
+</body>
+</html>

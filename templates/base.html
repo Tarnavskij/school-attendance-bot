@@ -61,7 +61,9 @@
             </button>
             <h1 class="topbar-title">{% block page_title %}Панель управления{% endblock %}</h1>
             <div class="topbar-right">
-                <span class="school-chip">🏫 {{ current_school_name }}</span>
+                <button type="button" class="school-chip" id="schoolChip" title="Информация о школе">
+                    🏫 {{ current_school_name }}
+                </button>
             </div>
         </header>
 
@@ -71,7 +73,45 @@
     </div>
 </div>
 
+<script nonce="{{ csp_nonce }}">
+    window.CURRENT_SCHOOL_ID = {{ current_school_id|default(0) }};
+    window.CSRF_TOKEN = "{{ csrf_token() }}";
+</script>
 <script nonce="{{ csp_nonce }}" src="{{ url_for('static', filename='js/admin.js') }}"></script>
+
+<!-- Модалка карточки школы -->
+<div class="modal-overlay" id="schoolModal" role="dialog" aria-labelledby="schoolModalTitle" aria-hidden="true">
+    <div class="modal">
+        <button class="modal-close" id="schoolModalClose" type="button" aria-label="Закрыть">&times;</button>
+        <h2 id="schoolModalTitle" style="font-size:22px;margin-bottom:20px;display:flex;align-items:center;gap:8px;">
+            <span id="schoolNameDisplay">{{ current_school_name }}</span>
+            <span class="edit-icon" id="schoolEditIcon" style="cursor:pointer;font-size:16px;color:var(--primary);">✏️</span>
+        </h2>
+
+        <div id="schoolNameEditBlock" style="display:none;margin-bottom:16px;">
+            <input type="text" id="schoolNameInput" value="{{ current_school_name }}" class="form-input" style="width:70%;">
+            <button id="schoolSaveBtn" type="button" class="btn btn-primary btn-sm" style="margin-left:8px;">Сохранить</button>
+        </div>
+
+        <div class="stats" style="grid-template-columns:repeat(3,1fr);margin-bottom:20px;">
+            <div class="stat-card" style="padding:14px;">
+                <div class="stat-number" id="schoolStatStudents" style="font-size:22px;">0</div>
+                <div class="stat-label">Учеников</div>
+            </div>
+            <div class="stat-card" style="padding:14px;">
+                <div class="stat-number" id="schoolStatClasses" style="font-size:22px;">0</div>
+                <div class="stat-label">Классов</div>
+            </div>
+            <div class="stat-card" style="padding:14px;">
+                <div class="stat-number" id="schoolStatTeachers" style="font-size:22px;">0</div>
+                <div class="stat-label">Учителей</div>
+            </div>
+        </div>
+
+        <button id="schoolModalClose2" type="button" class="btn btn-ghost" style="width:100%;">Закрыть</button>
+    </div>
+</div>
+
 {% block scripts %}{% endblock %}
 </body>
 </html>
