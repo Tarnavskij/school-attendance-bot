@@ -4,49 +4,73 @@
     <meta charset="utf-8">
     <title>Отчёт по пропускам — {{ selected_quarter.label }}</title>
     <style>
-        @page { size: A4; margin: 15mm; }
+        @page {
+            size: A4 landscape;
+            margin: 12mm 10mm;
+        }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Times New Roman', Times, serif;
             color: #000;
             background: #fff;
-            font-size: 12pt;
-            line-height: 1.4;
+            font-size: 11pt;
+            line-height: 1.35;
         }
-        .header { text-align: center; margin-bottom: 20px; }
-        .header .school { font-size: 14pt; font-weight: 700; margin-bottom: 6px; }
-        .header .title { font-size: 13pt; margin-bottom: 4px; }
-        .header .meta { font-size: 11pt; color: #333; }
+        .header {
+            text-align: center;
+            margin-bottom: 14px;
+        }
+        .header .school {
+            font-size: 14pt;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        .header .title {
+            font-size: 13pt;
+            margin-bottom: 2px;
+        }
+        .header .meta {
+            font-size: 11pt;
+            color: #333;
+        }
+
         table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 16px;
-            font-size: 10.5pt;
+            table-layout: fixed;   /* ← ключ: фиксированные ширины */
+            font-size: 10pt;
+            margin-top: 12px;
         }
         th, td {
             border: 1px solid #333;
-            padding: 6px 8px;
+            padding: 5px 6px;
             text-align: left;
+            vertical-align: middle;
+            overflow-wrap: break-word;
+            word-wrap: break-word;
         }
         th {
             background: #eef2f7;
             font-weight: 700;
             text-align: center;
-            font-size: 10pt;
+            font-size: 9.5pt;
+            line-height: 1.2;
         }
-        td.num { text-align: right; }
+        td.num { text-align: right; white-space: nowrap; }
         td.center { text-align: center; }
         tfoot td {
             font-weight: 700;
-            background: #f5f5f5;
+            background: #f3f4f6;
         }
+
         .footer {
-            margin-top: 30px;
+            margin-top: 20px;
             font-size: 10pt;
             color: #555;
             display: flex;
             justify-content: space-between;
         }
+
         .toolbar {
             position: fixed;
             top: 10px;
@@ -62,19 +86,21 @@
             cursor: pointer;
             font-size: 13px;
             border-radius: 4px;
+            font-family: inherit;
         }
         .toolbar button:hover { background: #f0f0f0; }
+
         @media print {
             .toolbar { display: none; }
-            body { font-size: 11pt; }
+            body { font-size: 10pt; }
         }
     </style>
 </head>
 <body>
 
 <div class="toolbar">
-    <button onclick="window.print()">🖨 Печать / PDF</button>
-    <button onclick="window.close()">✖ Закрыть</button>
+    <button type="button" onclick="window.print()">🖨 Печать / PDF</button>
+    <button type="button" onclick="window.close()">✖ Закрыть</button>
 </div>
 
 <div class="header">
@@ -88,6 +114,17 @@
 {% if rows %}
 <table>
     {% if mode == 'summary' %}
+    {# 8 колонок: Класс · Учеников · Всего · Болезнь · Оздоровление · Заявление · Приказ · Без уваж. #}
+    <colgroup>
+        <col style="width: 9%;">
+        <col style="width: 9%;">
+        <col style="width: 9%;">
+        <col style="width: 13%;">
+        <col style="width: 17%;">
+        <col style="width: 15%;">
+        <col style="width: 13%;">
+        <col style="width: 15%;">
+    </colgroup>
     <thead>
         <tr>
             <th>Класс</th>
@@ -103,7 +140,7 @@
     <tbody>
         {% for r in rows %}
         <tr>
-            <td>{{ r.class_name }}</td>
+            <td><strong>{{ r.class_name }}</strong></td>
             <td class="num">{{ r.students_count }}</td>
             <td class="num"><strong>{{ r.total }}</strong></td>
             <td class="num">{{ r.sick }}</td>
@@ -126,7 +163,19 @@
             <td class="num">{{ total_unexcused }}</td>
         </tr>
     </tfoot>
+
     {% else %}
+    {# 8 колонок: № · Ученик · Всего · Болезнь · Оздоровление · Заявление · Приказ · Без уваж. #}
+    <colgroup>
+        <col style="width: 5%;">
+        <col style="width: 31%;">
+        <col style="width: 10%;">
+        <col style="width: 13%;">
+        <col style="width: 15%;">
+        <col style="width: 13%;">
+        <col style="width: 12%;">
+        <col style="width: 11%;">
+    </colgroup>
     <thead>
         <tr>
             <th>№</th>
@@ -176,7 +225,6 @@
 </div>
 
 <script nonce="{{ csp_nonce }}">
-    // Автозапуск печати при загрузке (с небольшой задержкой, чтобы стили применились)
     window.addEventListener('load', function () {
         setTimeout(function () { window.print(); }, 300);
     });
